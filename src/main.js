@@ -9,6 +9,7 @@ const QUERY_PATH = "/platform/storage/query/v1";
 const REQUEST_TIMEOUT_MS = 180000;
 const QUERY_MAX_RECORDS = 200;
 const QUERY_POLL_LIMIT = 20;
+const DEFAULT_TIMEFRAME_MS = 24 * 60 * 60 * 1000;
 const SUPPLEMENTARY_MAX_CHARS = 15000;
 
 const DATA_MODE_INSTRUCTION =
@@ -126,7 +127,8 @@ async function describeHttpError(res) {
     const body = await res.text();
     try {
       const json = JSON.parse(body);
-      detail = json?.error?.message || json?.message || body;
+      const err = json?.error;
+      detail = [err?.message || json?.message, err?.details?.errorMessage].filter(Boolean).join(": ") || body;
     } catch {
       detail = body;
     }
@@ -247,6 +249,10 @@ async function runDql(creds, query) {
 
   let r = await post(`${QUERY_PATH}/query:execute`, {
     query,
+    defaultTimeframeStart: new Date(Date.now() - DEFAULT_TIMEFRAME_MS).toISOString(),
+    defaultTimeframeEnd: new Date().toISOString(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    locale: "en_US",
     requestTimeoutMilliseconds: 30000,
     maxResultRecords: QUERY_MAX_RECORDS,
   });
@@ -281,7 +287,19 @@ async function queryEnvironment(creds, question, emit) {
     emit({ type: "progress", message: "Generating DQL query..." });
     dql = await generateDql(creds, question);
     emit({ type: "progress", message: "Querying your environment..." });
-    const records = await runDql(creds, dql);
+    let records;
+    try {
+      records = await runDql(creds, dql);
+    } catch (err) {
+      emit({ type: "progress", message: "Query failed, generating a corrected query..." });
+      dql = await generateDql(
+        creds,
+        `${question}\n\nThis DQL query failed with the error "${err.message}":\n${dql}\n` +
+          "Write a corrected DQL query. Use a relative timeframe such as from:now()-24h and do not set a 'to' earlier than 'from'."
+      );
+      emit({ type: "progress", message: "Querying your environment..." });
+      records = await runDql(creds, dql);
+    }
     return { dql, recordCount: records.length, supplementary: buildSupplementary(question, dql, records) };
   } catch (err) {
     return { dql, queryError: err.message, supplementary: buildSupplementary(question, dql, [], err.message) };

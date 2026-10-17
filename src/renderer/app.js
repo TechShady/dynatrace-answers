@@ -126,7 +126,10 @@ function buildDataPanel(result) {
   summary.textContent = result.queryError
     ? `Environment query failed: ${result.queryError}`
     : `Queried your environment: ${result.recordCount ?? 0} record(s)`;
-  if (result.queryError) summary.classList.add("error-text");
+  if (result.queryError) {
+    summary.classList.add("error-text");
+    details.open = true;
+  }
   details.appendChild(summary);
   if (result.dql) {
     const pre = document.createElement("pre");

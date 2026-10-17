@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Dynatrace OnCall</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <span class="brand-name">Dynatrace OnCall</span>
+      </div>
+      <div class="topbar-right">
+        <span id="connectionStatus" class="status status-unknown">Not configured</span>
+        <button id="newChatBtn" class="btn btn-ghost" type="button">New chat</button>
+        <button id="settingsBtn" class="btn btn-ghost" type="button">Settings</button>
+      </div>
+    </header>
+
+    <main class="chat-layout">
+      <section id="messages" class="messages" aria-live="polite">
+        <div id="emptyState" class="empty-state">
+          <h1>Ask Dynatrace Intelligence</h1>
+          <p>Pick a recommended prompt below or type your own question.</p>
+        </div>
+      </section>
+
+      <section class="composer-area">
+        <div id="promptBar" class="prompt-bar" aria-label="Recommended prompts"></div>
+        <form id="composer" class="composer">
+          <textarea
+            id="input"
+            rows="2"
+            placeholder="Ask about problems, services, logs, DQL..."
+            aria-label="Message"
+          ></textarea>
+          <button id="sendBtn" class="btn btn-primary" type="submit">Send</button>
+        </form>
+        <p class="hint">Enter to send, Shift+Enter for a new line.</p>
+      </section>
+    </main>
+
+    <div id="settingsOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="dialog">
+        <div class="dialog-header">
+          <h2 id="settingsTitle">Settings</h2>
+          <button id="closeSettingsBtn" class="btn btn-ghost" type="button" aria-label="Close settings">Close</button>
+        </div>
+
+        <div class="dialog-body">
+          <section class="settings-section">
+            <h3>Connection</h3>
+            <label class="field">
+              <span>Tenant URL</span>
+              <input id="tenantUrl" type="url" placeholder="https://abc12345.apps.dynatrace.com" spellcheck="false" />
+            </label>
+
+            <label class="field">
+              <span>Platform token</span>
+              <input id="token" type="password" autocomplete="off" spellcheck="false" />
+              <small id="tokenHint" class="muted"></small>
+            </label>
+
+            <div class="scopes">
+              <p class="scopes-title">Required token scope</p>
+              <ul>
+                <li>
+                  <code>davis-copilot:conversations:execute</code>
+                  <span class="muted">Send chat messages to Dynatrace Intelligence.</span>
+                </li>
+              </ul>
+              <p class="muted small">
+                Create a platform token in Dynatrace under Account Management &gt; Identity &amp; access management
+                &gt; Platform tokens. The token owner also needs a policy that allows Davis CoPilot / Dynatrace Intelligence
+                conversations, and Dynatrace Intelligence must be enabled for the tenant.
+              </p>
+            </div>
+
+            <div class="row">
+              <button id="testBtn" class="btn" type="button">Test connection</button>
+              <span id="testResult" class="muted"></span>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-header">
+              <h3>Recommended prompts</h3>
+              <div>
+                <button id="resetPromptsBtn" class="btn btn-ghost" type="button">Reset to defaults</button>
+                <button id="addPromptBtn" class="btn" type="button">Add prompt</button>
+              </div>
+            </div>
+            <div id="promptList" class="prompt-list"></div>
+          </section>
+        </div>
+
+        <div class="dialog-footer">
+          <span id="saveError" class="error-text"></span>
+          <button id="cancelSettingsBtn" class="btn btn-ghost" type="button">Cancel</button>
+          <button id="saveSettingsBtn" class="btn btn-primary" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="markdown.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

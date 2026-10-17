@@ -1,0 +1,48 @@
+{
+  "name": "dynatrace-oncall",
+  "productName": "Dynatrace OnCall",
+  "version": "1.0.0",
+  "description": "Desktop chat client for Dynatrace Intelligence",
+  "main": "src/main.js",
+  "author": "Dynatrace OnCall",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "build": {
+    "appId": "com.dynatrace.oncall",
+    "productName": "Dynatrace OnCall",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Dynatrace OnCall",
+      "artifactName": "Dynatrace-OnCall-Setup-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3"
+  }
+}

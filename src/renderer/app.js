@@ -17,6 +17,7 @@ const els = {
   tenantUrl: $("tenantUrl"),
   token: $("token"),
   tokenHint: $("tokenHint"),
+  dataMode: $("dataMode"),
   testBtn: $("testBtn"),
   testResult: $("testResult"),
   promptList: $("promptList"),
@@ -85,6 +86,7 @@ function decorateCodeBlocks(container) {
 function renderAnswer(div, result) {
   div.innerHTML = window.renderMarkdown(result.text || "_No answer returned._");
   decorateCodeBlocks(div);
+  if (result.dql || result.queryError) div.prepend(buildDataPanel(result));
 
   if (result.notifications?.length) {
     const box = document.createElement("div");
@@ -115,6 +117,26 @@ function renderAnswer(div, result) {
     box.appendChild(ul);
     div.appendChild(box);
   }
+}
+
+function buildDataPanel(result) {
+  const details = document.createElement("details");
+  details.className = "data-panel";
+  const summary = document.createElement("summary");
+  summary.textContent = result.queryError
+    ? `Environment query failed: ${result.queryError}`
+    : `Queried your environment: ${result.recordCount ?? 0} record(s)`;
+  if (result.queryError) summary.classList.add("error-text");
+  details.appendChild(summary);
+  if (result.dql) {
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    code.textContent = result.dql;
+    pre.appendChild(code);
+    details.appendChild(pre);
+    decorateCodeBlocks(details);
+  }
+  return details;
 }
 
 async function sendPrompt(text) {
@@ -238,6 +260,7 @@ function openSettings() {
   els.testResult.textContent = "";
   els.testResult.className = "muted";
   els.saveError.textContent = "";
+  els.dataMode.checked = settings.dataMode !== false;
   renderPromptEditor(settings.prompts);
   els.overlay.classList.remove("hidden");
   els.tenantUrl.focus();
@@ -253,9 +276,13 @@ async function testConnection() {
   els.testResult.textContent = "Testing...";
   try {
     const r = await api.testConnection({ tenantUrl: els.tenantUrl.value, token: els.token.value });
-    if (r.chatAvailable) {
+    if (r.chatAvailable && (r.nl2dqlAvailable || !els.dataMode.checked)) {
       els.testResult.className = "ok-text";
       els.testResult.textContent = "Connected. Dynatrace Intelligence chat is available.";
+    } else if (r.chatAvailable) {
+      els.testResult.className = "error-text";
+      els.testResult.textContent =
+        "Chat works, but DQL generation is not available. Add davis-copilot:nl2dql:execute or turn off data mode.";
     } else {
       els.testResult.className = "error-text";
       els.testResult.textContent = `Connected, but chat is not available for this token. Skills: ${r.skills.join(", ") || "none"}. Check the davis-copilot:conversations:execute scope.`;
@@ -277,7 +304,15 @@ async function saveSettings() {
   }
   try {
     const tenantChanged = settings.tenantUrl !== els.tenantUrl.value.trim();
-    settings = { ...settings, ...(await api.saveSettings({ tenantUrl: els.tenantUrl.value, token: els.token.value, prompts })) };
+    settings = {
+      ...settings,
+      ...(await api.saveSettings({
+        tenantUrl: els.tenantUrl.value,
+        token: els.token.value,
+        prompts,
+        dataMode: els.dataMode.checked,
+      })),
+    };
     if (tenantChanged) newChat();
     renderPromptBar();
     setStatus("unknown", isConfigured() ? "Configured" : "Not configured");

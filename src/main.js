@@ -5,7 +5,17 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 const SKILLS_PATH = "/platform/davis/copilot/v1/skills";
+const QUERY_PATH = "/platform/storage/query/v1";
 const REQUEST_TIMEOUT_MS = 180000;
+const QUERY_MAX_RECORDS = 200;
+const QUERY_POLL_LIMIT = 20;
+const SUPPLEMENTARY_MAX_CHARS = 15000;
+
+const DATA_MODE_INSTRUCTION =
+  "You are assisting an on-call engineer. The supplementary context contains a DQL query that was run against the user's " +
+  "Dynatrace environment and its results. Answer the question using those results: cite concrete names, counts and values. " +
+  "If the results are empty, say so plainly and suggest how to refine the question. If the query failed, explain that and " +
+  "suggest a corrected DQL query. Do not claim you lack access to the environment.";
 
 const DEFAULT_PROMPTS = [
   {
@@ -51,9 +61,10 @@ function loadSettings() {
       tenantUrl: typeof raw.tenantUrl === "string" ? raw.tenantUrl : "",
       tokenEnc: typeof raw.tokenEnc === "string" ? raw.tokenEnc : "",
       prompts: Array.isArray(raw.prompts) ? sanitizePrompts(raw.prompts) : DEFAULT_PROMPTS,
+      dataMode: raw.dataMode !== false,
     };
   } catch {
-    return { tenantUrl: "", tokenEnc: "", prompts: DEFAULT_PROMPTS };
+    return { tenantUrl: "", tokenEnc: "", prompts: DEFAULT_PROMPTS, dataMode: true };
   }
 }
 
@@ -67,6 +78,7 @@ function publicSettings(settings) {
     tenantUrl: settings.tenantUrl,
     hasToken: Boolean(settings.tokenEnc),
     prompts: settings.prompts,
+    dataMode: settings.dataMode,
     defaultPrompts: DEFAULT_PROMPTS,
   };
 }
@@ -126,7 +138,7 @@ async function describeHttpError(res) {
     return `Authentication failed (401). Check that the token is valid for this tenant. ${detail}`;
   }
   if (res.status === 403) {
-    return `Access denied (403). The token needs the davis-copilot:conversations:execute scope and Dynatrace Intelligence must be enabled for the tenant. ${detail}`;
+    return `Access denied (403). The token is missing a required scope or permission policy (see Settings for the scope list). ${detail}`;
   }
   return `Dynatrace returned HTTP ${res.status}. ${detail}`;
 }
@@ -209,6 +221,73 @@ async function readConversationStream(res, emit) {
   return result || { text: answer, state: undefined, sources: [], notifications };
 }
 
+async function generateDql(creds, text) {
+  const json = await callDynatrace(
+    creds,
+    `${SKILLS_PATH}/nl2dql:generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ text }),
+    },
+    (res) => res.json()
+  );
+  if (json.status === "FAILED" || !json.dql) throw new Error("Dynatrace Intelligence could not generate a DQL query for this question.");
+  return json.dql;
+}
+
+async function runDql(creds, query) {
+  const post = (path, body) =>
+    callDynatrace(
+      creds,
+      path,
+      { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) },
+      (res) => res.json()
+    );
+
+  let r = await post(`${QUERY_PATH}/query:execute`, {
+    query,
+    requestTimeoutMilliseconds: 30000,
+    maxResultRecords: QUERY_MAX_RECORDS,
+  });
+  for (let i = 0; (r.state === "RUNNING" || r.state === "NOT_STARTED") && r.requestToken; i++) {
+    if (i >= QUERY_POLL_LIMIT) throw new Error("The DQL query took too long to complete.");
+    const qs = new URLSearchParams({ "request-token": r.requestToken, "request-timeout-milliseconds": "10000" });
+    r = await callDynatrace(creds, `${QUERY_PATH}/query:poll?${qs}`, { headers: { Accept: "application/json" } }, (res) =>
+      res.json()
+    );
+  }
+  if (r.state !== "SUCCEEDED") throw new Error(`DQL query ended in state ${r.state || "UNKNOWN"}.`);
+  return r.result?.records || [];
+}
+
+function buildSupplementary(question, dql, records, error) {
+  const header = `Question: ${question}\nDQL query run against the user's Dynatrace environment:\n${dql || "(none)"}\n`;
+  if (error) return `${header}\nThe query failed: ${error}`;
+  let json = JSON.stringify(records);
+  let note = `${records.length} record(s) returned`;
+  if (json.length > SUPPLEMENTARY_MAX_CHARS) {
+    let kept = records.length;
+    while (kept > 1 && JSON.stringify(records.slice(0, kept)).length > SUPPLEMENTARY_MAX_CHARS) kept = Math.floor(kept / 2);
+    json = JSON.stringify(records.slice(0, kept)).slice(0, SUPPLEMENTARY_MAX_CHARS);
+    note += `, showing the first ${kept}`;
+  }
+  return `${header}\nResults (${note}):\n${json}`;
+}
+
+async function queryEnvironment(creds, question, emit) {
+  let dql = "";
+  try {
+    emit({ type: "progress", message: "Generating DQL query..." });
+    dql = await generateDql(creds, question);
+    emit({ type: "progress", message: "Querying your environment..." });
+    const records = await runDql(creds, dql);
+    return { dql, recordCount: records.length, supplementary: buildSupplementary(question, dql, records) };
+  } catch (err) {
+    return { dql, queryError: err.message, supplementary: buildSupplementary(question, dql, [], err.message) };
+  }
+}
+
 function registerIpc() {
   ipcMain.handle("settings:get", () => publicSettings(loadSettings()));
 
@@ -219,6 +298,7 @@ function registerIpc() {
       tenantUrl: normalizeTenantUrl(input?.tenantUrl),
       tokenEnc: token ? encryptToken(token) : current.tokenEnc,
       prompts: sanitizePrompts(Array.isArray(input?.prompts) ? input.prompts : []),
+      dataMode: input?.dataMode !== false,
     };
     writeSettings(next);
     return publicSettings(next);
@@ -230,7 +310,7 @@ function registerIpc() {
       res.json()
     );
     const skills = Array.isArray(data?.skills) ? data.skills : [];
-    return { skills, chatAvailable: skills.includes("conversation") };
+    return { skills, chatAvailable: skills.includes("conversation"), nl2dqlAvailable: skills.includes("nl2dql") };
   });
 
   ipcMain.handle("chat:send", async (event, request) => {
@@ -244,7 +324,19 @@ function registerIpc() {
     const body = { text: text.slice(0, 10000) };
     if (request.state) body.state = request.state;
 
-    return callDynatrace(
+    let data = null;
+    if (loadSettings().dataMode) {
+      data = await queryEnvironment(creds, body.text, emit);
+      emit({ type: "data", dql: data.dql, recordCount: data.recordCount, queryError: data.queryError });
+      body.context = [
+        { type: "supplementary", value: data.supplementary },
+        { type: "instruction", value: DATA_MODE_INSTRUCTION },
+        { type: "document-retrieval", value: "dynatrace" },
+      ];
+      emit({ type: "progress", message: "Analyzing results..." });
+    }
+
+    const answer = await callDynatrace(
       creds,
       `${SKILLS_PATH}/conversations:message`,
       {
@@ -265,6 +357,7 @@ function registerIpc() {
         };
       }
     );
+    return data ? { ...answer, dql: data.dql, recordCount: data.recordCount, queryError: data.queryError } : answer;
   });
 
   ipcMain.handle("open-external", (_event, rawUrl) => {

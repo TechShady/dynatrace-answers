@@ -67,12 +67,31 @@
             </label>
 
             <div class="scopes">
-              <p class="scopes-title">Required token scope</p>
+              <p class="scopes-title">Required token scopes</p>
               <ul>
                 <li>
                   <code>davis-copilot:conversations:execute</code>
-                  <span class="muted">Send chat messages to Dynatrace Intelligence.</span>
+                  <span class="muted">Chat with Dynatrace Intelligence.</span>
                 </li>
+              </ul>
+              <p class="scopes-title">Additional scopes for data mode</p>
+              <ul>
+                <li>
+                  <code>davis-copilot:nl2dql:execute</code>
+                  <span class="muted">Turn questions into DQL queries.</span>
+                </li>
+                <li><code>storage:buckets:read</code><span class="muted">Required for all Grail queries.</span></li>
+                <li><code>storage:events:read</code><span class="muted">Problems and events.</span></li>
+                <li><code>storage:logs:read</code><span class="muted">Logs.</span></li>
+                <li><code>storage:metrics:read</code><span class="muted">Metrics (timeseries).</span></li>
+                <li><code>storage:spans:read</code><span class="muted">Traces and spans.</span></li>
+                <li><code>storage:entities:read</code><span class="muted">Entities (hosts, services...).</span></li>
+                <li><code>storage:smartscape:read</code><span class="muted">Smartscape topology.</span></li>
+                <li><code>storage:bizevents:read</code><span class="muted">Business events.</span></li>
+                <li><code>storage:user.events:read</code><span class="muted">Real user monitoring events.</span></li>
+                <li><code>storage:user.sessions:read</code><span class="muted">Real user monitoring sessions.</span></li>
+                <li><code>storage:security.events:read</code><span class="muted">Security events.</span></li>
+                <li><code>storage:system:read</code><span class="muted">System events (workflows, audit).</span></li>
               </ul>
               <p class="muted small">
                 Create a platform token in Dynatrace under Account Management &gt; Identity &amp; access management
@@ -85,6 +104,19 @@
               <button id="testBtn" class="btn" type="button">Test connection</button>
               <span id="testResult" class="muted"></span>
             </div>
+          </section>
+
+          <section class="settings-section">
+            <h3>Data mode</h3>
+            <label class="toggle">
+              <input id="dataMode" type="checkbox" />
+              <span>Answer using my environment's data</span>
+            </label>
+            <p class="muted small">
+              Each question is turned into a DQL query, run against your tenant, and the results (up to
+              200 records) are sent to Dynatrace Intelligence as context. Query results are not masked, so they may
+              include sensitive values from logs or events. Turn this off for documentation-only answers.
+            </p>
           </section>
 
           <section class="settings-section">

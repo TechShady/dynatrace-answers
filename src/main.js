@@ -278,14 +278,21 @@ function buildSupplementary(question, dql, records, error) {
     json = JSON.stringify(records.slice(0, kept)).slice(0, SUPPLEMENTARY_MAX_CHARS);
     note += `, showing the first ${kept}`;
   }
-  return `${header}\nResults (${note}):\n${json}`;
+  const coverage = records.length === 0
+    ? "\nCoverage warning: This query returned no rows. This does NOT establish that the application has no traffic, no monitoring data, or no performance issues. The query may use the wrong data source, entity identifier, filter, or timeframe. Classic RUM application data is not interchangeable with new RUM user.events or dt.frontend metrics. State that performance cannot be assessed from this query; do not claim the application is healthy or absent."
+    : "";
+  return `${header}\nResults (${note}):\n${json}${coverage}`;
 }
 
 async function queryEnvironment(creds, question, emit) {
   let dql = "";
+  const frontendQuestion = /frontend|website|ibanking|rum|apdex|web\s+app/i.test(question);
+  const frontendHints = frontendQuestion
+    ? "\nFor website performance, query user.events using frontend.name to match the application name, case-insensitively. User-action events can use characteristics.has_user_action and duration. Do not assume application names are entity IDs, or require page-summary/navigation characteristics to exist. Do not infer classic Apdex from event duration. Use from:now()-2h, to:now() unless the question specifies another timeframe."
+    : "";
   try {
     emit({ type: "progress", message: "Generating DQL query..." });
-    dql = await generateDql(creds, question);
+    dql = await generateDql(creds, question + frontendHints);
     emit({ type: "progress", message: "Querying your environment..." });
     let records;
     try {
@@ -299,6 +306,22 @@ async function queryEnvironment(creds, question, emit) {
       );
       emit({ type: "progress", message: "Querying your environment..." });
       records = await runDql(creds, dql);
+    }
+    if (frontendQuestion && records.length === 0) {
+      emit({ type: "progress", message: "No rows matched; checking frontend event coverage..." });
+      dql = await generateDql(
+        creds,
+        question + frontendHints +
+          `\nThe previous query returned zero rows:\n${dql}\n` +
+          "Generate a simpler coverage query against user.events, grouped by frontend.name, with count() and no performance-characteristic filters. Match the application name from the question using contains with caseSensitive:false. This is a coverage check, not a performance verdict."
+      );
+      records = await runDql(creds, dql);
+      return {
+        dql,
+        recordCount: records.length,
+        supplementary: buildSupplementary(question, dql, records) +
+          "\nThis is a fallback event-coverage query. Event counts establish traffic coverage only; they cannot establish performance, Apdex, or absence of problems. State that the original performance query was inconclusive."
+      };
     }
     return { dql, recordCount: records.length, supplementary: buildSupplementary(question, dql, records) };
   } catch (err) {

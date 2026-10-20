@@ -284,15 +284,33 @@ function buildSupplementary(question, dql, records, error) {
   return `${header}\nResults (${note}):\n${json}${coverage}`;
 }
 
+function sessionCountQuery(question) {
+  if (!/\bsessions?\b/i.test(question) || !/\berrors?\b/i.test(question)) return null;
+  const application = question.match(/\b[A-Za-z0-9-]+_[A-Za-z0-9_-]+\b/);
+  const threshold = question.match(/(?:error\s*count|errors?)\s*(?:is\s*)?(?:>|greater than|more than)\s*(\d+)\b/i);
+  if (!application || !threshold) return null;
+  if (/\b(yesterday|today|since|between|before|after|ago)\b|\d{4}-\d{2}-\d{2}/i.test(question)) return null;
+  const timeframe = question.match(/\blast\s+(\d+)\s*(hours?|hrs?|h|days?|d|minutes?|mins?|m)\b/i);
+  if (/\blast\b/i.test(question) && !timeframe) return null;
+  const interval = timeframe ? `${timeframe[1]}${timeframe[2][0].toLowerCase()}` : "2h";
+  return `fetch user.sessions, from:now()-${interval}, to:now()\n` +
+    `| filter matchesValue(frontend.name, ${JSON.stringify(application[0])})\n` +
+    `| filter error.count > ${threshold[1]}\n` +
+    "| summarize matching_sessions=countDistinctExact(dt.rum.session.id)";
+}
+
 async function queryEnvironment(creds, question, emit) {
   let dql = "";
+  const sessionQuestion = /\bsessions?\b/i.test(question);
   const frontendQuestion = /frontend|website|ibanking|rum|apdex|web\s+app/i.test(question);
-  const frontendHints = frontendQuestion
+  const queryHints = sessionQuestion
+    ? "\nQuery user.sessions, NOT user.events or classic usersessions. Verified session fields: frontend.name (ARRAY of application names), dt.rum.session.id (session ID), error.count (numeric total errors), start_time, end_time. Filter the frontend.name ARRAY using matchesValue(frontend.name, \"*application name*\"); NEVER use contains or scalar equality on this array. Do not compare names to entity IDs. For error count > 3 use filter error.count > 3 BEFORE aggregation. For a count use summarize matching_sessions=countDistinctExact(dt.rum.session.id), not a limited session list or event count. Preserve the requested threshold and comparison exactly. Use from:now()-2h, to:now() unless another timeframe is requested."
+    : frontendQuestion
     ? "\nFor website performance, query user.events using frontend.name to match the application name, case-insensitively. User-action events can use characteristics.has_user_action and duration. Do not assume application names are entity IDs, or require page-summary/navigation characteristics to exist. Do not infer classic Apdex from event duration. Use from:now()-2h, to:now() unless the question specifies another timeframe."
     : "";
   try {
     emit({ type: "progress", message: "Generating DQL query..." });
-    dql = await generateDql(creds, question + frontendHints);
+    dql = sessionCountQuery(question) || await generateDql(creds, question + queryHints);
     emit({ type: "progress", message: "Querying your environment..." });
     let records;
     try {
@@ -301,26 +319,32 @@ async function queryEnvironment(creds, question, emit) {
       emit({ type: "progress", message: "Query failed, generating a corrected query..." });
       dql = await generateDql(
         creds,
-        `${question}\n\nThis DQL query failed with the error "${err.message}":\n${dql}\n` +
+        `${question}${queryHints}\n\nThis DQL query failed with the error "${err.message}":\n${dql}\n` +
           "Write a corrected DQL query. Use a relative timeframe such as from:now()-24h and do not set a 'to' earlier than 'from'."
       );
       emit({ type: "progress", message: "Querying your environment..." });
       records = await runDql(creds, dql);
     }
-    if (frontendQuestion && records.length === 0) {
-      emit({ type: "progress", message: "No rows matched; checking frontend event coverage..." });
+    if ((frontendQuestion || sessionQuestion) && records.length === 0) {
+      emit({ type: "progress", message: "No rows matched; checking data coverage..." });
       dql = await generateDql(
         creds,
-        question + frontendHints +
+        question + queryHints +
           `\nThe previous query returned zero rows:\n${dql}\n` +
-          "Generate a simpler coverage query against user.events, grouped by frontend.name, with count() and no performance-characteristic filters. Match the application name from the question using contains with caseSensitive:false. This is a coverage check, not a performance verdict."
+          (sessionQuestion
+            ? "Generate a coverage query against user.sessions grouped by frontend.name with total_sessions=countDistinctExact(dt.rum.session.id) and maximum_errors=max(error.count). Remove the error threshold for this coverage check only. "
+            : "Generate a simpler coverage query against user.events, grouped by frontend.name, with count() and no performance-characteristic filters. ") +
+          (sessionQuestion
+            ? "Match the frontend.name array using matchesValue, not contains. "
+            : "Match the application name from the question using contains with caseSensitive:false. ") +
+          "This is a coverage check, not a performance verdict."
       );
       records = await runDql(creds, dql);
       return {
         dql,
         recordCount: records.length,
         supplementary: buildSupplementary(question, dql, records) +
-          "\nThis is a fallback event-coverage query. Event counts establish traffic coverage only; they cannot establish performance, Apdex, or absence of problems. State that the original performance query was inconclusive."
+          "\nThis is a fallback coverage query. Counts establish data coverage only; they do not answer the original filtered question or establish absence of errors or performance problems. State that the original query was inconclusive."
       };
     }
     return { dql, recordCount: records.length, supplementary: buildSupplementary(question, dql, records) };

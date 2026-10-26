@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, safeStorage, shell, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, safeStorage, Menu } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -13,46 +13,46 @@ const DEFAULT_TIMEFRAME_MS = 24 * 60 * 60 * 1000;
 const SUPPLEMENTARY_MAX_CHARS = 15000;
 
 const DATA_MODE_INSTRUCTION =
-  "You are assisting an on-call engineer. The supplementary context contains a DQL query that was run against the user's " +
-  "Dynatrace environment and its results. Answer the question using those results: cite concrete names, counts and values. " +
-  "If the results are empty, say so plainly and suggest how to refine the question. If the query failed, explain that and " +
-  "suggest a corrected DQL query. Do not claim you lack access to the environment.";
+  "You are assisting an on-call engineer who cannot access the Dynatrace UI. Use the supplementary context and its query results " +
+  "to give a concise, evidence-based answer with concrete frontend names, counts, time ranges, and user impact. Never include DQL, " +
+  "query text, URLs, links, or instructions to open or operate the Dynatrace UI. Do not suggest UI steps. Distinguish confirmed " +
+  "findings from missing or inconclusive telemetry. If the query failed or returned no usable data, say that frontend health " +
+  "could not be assessed from the available telemetry; do not claim the system is healthy or absent.";
 
-const DEFAULT_PROMPTS = [
-  {
-    label: "Triage a problem",
-    prompt: "Walk me through triaging an open Dynatrace problem as the on-call engineer. What should I check first?",
+const FRONTEND_WORKFLOWS = {
+  "website-health": {
+    requiresInput: true,
+    question: (value) => `Assess the health and user impact of the frontend application ${JSON.stringify(value)} over the last 2 hours. Identify error signals, slow interactions, affected user volume, and whether this appears isolated to this frontend. State what the telemetry can and cannot confirm.`,
+    hints: "Query user.events for web frontend data using frontend.type == \"web\" and the named frontend's scalar frontend.name field over a 2-hour timeframe. Match the name case-insensitively. Summarize event volume and available error and duration signals; use only fields supported by the data model. Do not substitute infrastructure or backend-only health for frontend evidence.",
   },
-  {
-    label: "Error logs (DQL)",
-    prompt: "Write a DQL query that shows error logs from the last hour grouped by service, sorted by count.",
+  "system-health": {
+    question: () => "Assess whether there is a system-wide frontend issue across all monitored web frontends over the last 2 hours. Compare frontend applications, identify which are affected, and distinguish broad impact from a single-frontend issue.",
+    hints: "Query user.events for all web frontends using frontend.type == \"web\", grouped by frontend.name over the last 2 hours. Summarize event volume and available frontend error and duration signals per frontend. Use only fields supported by the data model.",
   },
-  {
-    label: "Failing services",
-    prompt: "How do I find the services with the highest failure rate right now? Include a DQL query.",
+  "session-health": {
+    requiresInput: true,
+    question: (value) => `Assess the recent RUM session health for the user tag ${JSON.stringify(value)}. Identify matching session count, frontend application, error count, session timing, and any evidence of a wider frontend issue.`,
+    hints: "Query user.sessions, NOT user.events. Match exactly against dt.rum.user_tag, the session-level user identifier. Query from:now()-32h to:now() to account for recently ended sessions that may take 30+ minutes to be aggregated. Use frontend.name (array; filter with matchesValue), dt.rum.session.id, error.count, start_time, and end_time. If dt.rum.user_tag is missing or unpopulated, state that the tag cannot be matched and do not substitute a session ID or frontend name.",
   },
-  {
-    label: "Host saturation",
-    prompt: "Write a DQL query to find hosts with CPU usage above 90% in the last 30 minutes.",
+  "impact-scope": {
+    requiresInput: true,
+    question: (value) => `An end user reported this frontend symptom: ${JSON.stringify(value)}. Determine whether the available telemetry indicates impact to one user/session, many users, one frontend application, or multiple frontends over the last 2 hours.`,
+    hints: "Query recent user.events where frontend.type == \"web\", grouped by frontend.name, and use available event/error/duration dimensions relevant to the reported symptom. Compare affected frontend counts and user/session counts only when those fields are present. Do not infer user impact from event counts alone.",
   },
-  {
-    label: "Slow endpoints",
-    prompt: "How do I find the slowest endpoints and trace them to their root cause in Dynatrace?",
+  "frontend-errors": {
+    question: () => "Find the most significant frontend errors across all monitored web applications over the last 2 hours. Rank affected frontends by observed impact and estimate affected users or sessions only when the telemetry supports it.",
+    hints: "Query user.events for web frontends using frontend.type == \"web\" over the last 2 hours. Identify error events using characteristics.has_error == true, then aggregate by frontend.name and available error dimensions. Do not invent an error field or treat every user event as an error.",
   },
-];
+  "slow-pages": {
+    question: () => "Identify the slowest frontend experiences across monitored web applications over the last 2 hours and determine whether slowness is isolated or widespread. Report measured latency and affected frontends/users only when available.",
+    hints: "Query user.events for web frontends using frontend.type == \"web\" over the last 2 hours. Use user-interaction events (characteristics.has_user_interaction) and their duration/performance fields, grouped by frontend.name and page/action dimensions when present. Do not infer page-load performance from unrelated event duration or from backend latency alone.",
+  },
+};
 
 let mainWindow = null;
 
 function settingsFile() {
   return path.join(app.getPath("userData"), "settings.json");
-}
-
-function sanitizePrompts(list) {
-  return list
-    .filter((p) => p && typeof p.label === "string" && typeof p.prompt === "string")
-    .map((p) => ({ label: p.label.trim().slice(0, 60), prompt: p.prompt.trim().slice(0, 4000) }))
-    .filter((p) => p.label && p.prompt)
-    .slice(0, 30);
 }
 
 function loadSettings() {
@@ -61,11 +61,10 @@ function loadSettings() {
     return {
       tenantUrl: typeof raw.tenantUrl === "string" ? raw.tenantUrl : "",
       tokenEnc: typeof raw.tokenEnc === "string" ? raw.tokenEnc : "",
-      prompts: Array.isArray(raw.prompts) ? sanitizePrompts(raw.prompts) : DEFAULT_PROMPTS,
       dataMode: raw.dataMode !== false,
     };
   } catch {
-    return { tenantUrl: "", tokenEnc: "", prompts: DEFAULT_PROMPTS, dataMode: true };
+    return { tenantUrl: "", tokenEnc: "", dataMode: true };
   }
 }
 
@@ -78,9 +77,7 @@ function publicSettings(settings) {
   return {
     tenantUrl: settings.tenantUrl,
     hasToken: Boolean(settings.tokenEnc),
-    prompts: settings.prompts,
     dataMode: settings.dataMode,
-    defaultPrompts: DEFAULT_PROMPTS,
   };
 }
 
@@ -299,15 +296,36 @@ function sessionCountQuery(question) {
     "| summarize matching_sessions=countDistinctExact(dt.rum.session.id)";
 }
 
-async function queryEnvironment(creds, question, emit) {
+function resolveFrontendWorkflow(input) {
+  if (!input) return null;
+  const definition = FRONTEND_WORKFLOWS[input.id];
+  if (!definition) throw new Error("Unknown frontend check.");
+  const value = String(input.value || "").trim().slice(0, 500);
+  if (definition.requiresInput && !value) throw new Error("Enter the requested frontend or user details.");
+  return {
+    question: definition.question(value),
+    hints: definition.hints,
+  };
+}
+
+async function queryEnvironment(creds, question, emit, workflow) {
   let dql = "";
   const sessionQuestion = /\bsessions?\b/i.test(question);
   const frontendQuestion = /frontend|website|ibanking|rum|apdex|web\s+app/i.test(question);
-  const queryHints = sessionQuestion
+  const queryHints = workflow
+    ? `\n${workflow.hints}`
+    : sessionQuestion
     ? "\nQuery user.sessions, NOT user.events or classic usersessions. Verified session fields: frontend.name (ARRAY of application names), dt.rum.session.id (session ID), error.count (numeric total errors), start_time, end_time. Filter the frontend.name ARRAY using matchesValue(frontend.name, \"*application name*\"); NEVER use contains or scalar equality on this array. Do not compare names to entity IDs. For error count > 3 use filter error.count > 3 BEFORE aggregation. For a count use summarize matching_sessions=countDistinctExact(dt.rum.session.id), not a limited session list or event count. Preserve the requested threshold and comparison exactly. Use from:now()-2h, to:now() unless another timeframe is requested."
     : frontendQuestion
     ? "\nFor website performance, query user.events using frontend.name to match the application name, case-insensitively. User-action events can use characteristics.has_user_action and duration. Do not assume application names are entity IDs, or require page-summary/navigation characteristics to exist. Do not infer classic Apdex from event duration. Use from:now()-2h, to:now() unless the question specifies another timeframe."
     : "";
+  const coverageHints = workflow?.id === "session-health"
+    ? "Generate a coverage query against user.sessions grouped by frontend.name with total_sessions=countDistinctExact(dt.rum.session.id) and maximum_errors=max(error.count). Keep the exact dt.rum.user_tag match. Match frontend.name arrays using matchesValue. "
+    : workflow?.id === "website-health"
+    ? "Generate a simple coverage query against user.events for the named web frontend, grouped by frontend.name with count() and no performance/error filters. Match the scalar frontend.name case-insensitively. "
+    : workflow
+    ? "Generate a simple coverage query against user.events for all web frontends, grouped by frontend.name with count() and no performance/error filters. Do not add a frontend-name or symptom filter. "
+    : "Generate a simple coverage query against user.events, grouped by frontend.name, with count() and no performance-characteristic filters. ";
   try {
     emit({ type: "progress", message: "Generating DQL query..." });
     dql = sessionCountQuery(question) || await generateDql(creds, question + queryHints);
@@ -331,12 +349,7 @@ async function queryEnvironment(creds, question, emit) {
         creds,
         question + queryHints +
           `\nThe previous query returned zero rows:\n${dql}\n` +
-          (sessionQuestion
-            ? "Generate a coverage query against user.sessions grouped by frontend.name with total_sessions=countDistinctExact(dt.rum.session.id) and maximum_errors=max(error.count). Remove the error threshold for this coverage check only. "
-            : "Generate a simpler coverage query against user.events, grouped by frontend.name, with count() and no performance-characteristic filters. ") +
-          (sessionQuestion
-            ? "Match the frontend.name array using matchesValue, not contains. "
-            : "Match the application name from the question using contains with caseSensitive:false. ") +
+          coverageHints +
           "This is a coverage check, not a performance verdict."
       );
       records = await runDql(creds, dql);
@@ -362,7 +375,6 @@ function registerIpc() {
     const next = {
       tenantUrl: normalizeTenantUrl(input?.tenantUrl),
       tokenEnc: token ? encryptToken(token) : current.tokenEnc,
-      prompts: sanitizePrompts(Array.isArray(input?.prompts) ? input.prompts : []),
       dataMode: input?.dataMode !== false,
     };
     writeSettings(next);
@@ -379,7 +391,8 @@ function registerIpc() {
   });
 
   ipcMain.handle("chat:send", async (event, request) => {
-    const text = String(request?.text || "").trim();
+    const workflow = resolveFrontendWorkflow(request?.workflow);
+    const text = workflow?.question || String(request?.text || "").trim();
     if (!text) throw new Error("Prompt is empty.");
     const creds = resolveCredentials();
     const emit = (payload) => {
@@ -390,9 +403,8 @@ function registerIpc() {
     if (request.state) body.state = request.state;
 
     let data = null;
-    if (loadSettings().dataMode) {
-      data = await queryEnvironment(creds, body.text, emit);
-      emit({ type: "data", dql: data.dql, recordCount: data.recordCount, queryError: data.queryError });
+    if (workflow || loadSettings().dataMode) {
+      data = await queryEnvironment(creds, body.text, emit, workflow);
       body.context = [
         { type: "supplementary", value: data.supplementary },
         { type: "instruction", value: DATA_MODE_INSTRUCTION },
@@ -422,13 +434,9 @@ function registerIpc() {
         };
       }
     );
-    return data ? { ...answer, dql: data.dql, recordCount: data.recordCount, queryError: data.queryError } : answer;
+    return { ...answer, sources: [] };
   });
 
-  ipcMain.handle("open-external", (_event, rawUrl) => {
-    const url = new URL(String(rawUrl));
-    if (url.protocol === "https:") return shell.openExternal(url.toString());
-  });
 }
 
 function createWindow() {

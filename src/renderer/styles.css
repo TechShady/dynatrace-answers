@@ -215,34 +215,16 @@ body {
   border-radius: 4px;
 }
 
-.msg-ai a {
-  color: var(--accent);
-}
-
-.copy-btn {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  font-size: 11px;
-  padding: 2px 8px;
-}
-
 .progress {
   color: var(--muted);
   font-style: italic;
 }
 
-.sources,
 .notifications {
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
   font-size: 12px;
-}
-
-.sources ul {
-  margin: 4px 0 0;
-  padding-left: 18px;
 }
 
 .notifications {
@@ -338,6 +320,10 @@ input:focus {
   border-radius: 12px;
 }
 
+.workflow-dialog {
+  width: min(460px, 100%);
+}
+
 .dialog-header,
 .dialog-footer {
   display: flex;
@@ -431,24 +417,6 @@ input:focus {
   gap: 12px;
 }
 
-.prompt-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.prompt-item {
-  display: grid;
-  grid-template-columns: 180px 1fr auto;
-  gap: 8px;
-  align-items: start;
-}
-
-.prompt-item textarea {
-  min-height: 38px;
-  resize: vertical;
-}
-
 .error-text {
   color: var(--err);
   margin-right: auto;
@@ -467,22 +435,4 @@ input:focus {
 
 .toggle input {
   width: auto;
-}
-
-.data-panel {
-  margin-bottom: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  font-size: 12px;
-}
-
-.data-panel summary {
-  cursor: pointer;
-  color: var(--muted);
-}
-
-.data-panel pre {
-  margin: 8px 0 0;
 }

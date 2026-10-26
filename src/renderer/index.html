@@ -26,17 +26,17 @@
       <section id="messages" class="messages" aria-live="polite">
         <div id="emptyState" class="empty-state">
           <h1>Ask Dynatrace Intelligence</h1>
-          <p>Pick a recommended prompt below or type your own question.</p>
+          <p>Choose a frontend health check or ask a question about the telemetry.</p>
         </div>
       </section>
 
       <section class="composer-area">
-        <div id="promptBar" class="prompt-bar" aria-label="Recommended prompts"></div>
+        <div id="promptBar" class="prompt-bar" aria-label="Frontend health checks"></div>
         <form id="composer" class="composer">
           <textarea
             id="input"
             rows="2"
-            placeholder="Ask about problems, services, logs, DQL..."
+            placeholder="Ask about frontend health, errors, sessions, or user impact..."
             aria-label="Message"
           ></textarea>
           <button id="sendBtn" class="btn btn-primary" type="submit">Send</button>
@@ -44,6 +44,24 @@
         <p class="hint">Enter to send, Shift+Enter for a new line.</p>
       </section>
     </main>
+
+    <div id="workflowOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="workflowTitle">
+      <form id="workflowForm" class="dialog workflow-dialog">
+        <div class="dialog-header">
+          <h2 id="workflowTitle"></h2>
+        </div>
+        <div class="dialog-body">
+          <label class="field">
+            <span id="workflowLabel"></span>
+            <input id="workflowInput" type="text" maxlength="500" required />
+          </label>
+        </div>
+        <div class="dialog-footer">
+          <button id="cancelWorkflowBtn" class="btn btn-ghost" type="button">Cancel</button>
+          <button class="btn btn-primary" type="submit">Run check</button>
+        </div>
+      </form>
+    </div>
 
     <div id="settingsOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <div class="dialog">
@@ -113,21 +131,9 @@
               <span>Answer using my environment's data</span>
             </label>
             <p class="muted small">
-              Each question is turned into a DQL query, run against your tenant, and the results (up to
-              200 records) are sent to Dynatrace Intelligence as context. Query results are not masked, so they may
-              include sensitive values from logs or events. Turn this off for documentation-only answers.
+              Free-text questions use environment data when this is enabled. Frontend health check buttons always run a query,
+              even when this option is off. Query results are sent to Dynatrace Intelligence and may contain sensitive values.
             </p>
-          </section>
-
-          <section class="settings-section">
-            <div class="section-header">
-              <h3>Recommended prompts</h3>
-              <div>
-                <button id="resetPromptsBtn" class="btn btn-ghost" type="button">Reset to defaults</button>
-                <button id="addPromptBtn" class="btn" type="button">Add prompt</button>
-              </div>
-            </div>
-            <div id="promptList" class="prompt-list"></div>
           </section>
         </div>
 

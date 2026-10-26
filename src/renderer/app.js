@@ -13,6 +13,11 @@ const els = {
   newChatBtn: $("newChatBtn"),
   settingsBtn: $("settingsBtn"),
   status: $("connectionStatus"),
+  workflowOverlay: $("workflowOverlay"),
+  workflowForm: $("workflowForm"),
+  workflowTitle: $("workflowTitle"),
+  workflowLabel: $("workflowLabel"),
+  workflowInput: $("workflowInput"),
   overlay: $("settingsOverlay"),
   tenantUrl: $("tenantUrl"),
   token: $("token"),
@@ -20,19 +25,26 @@ const els = {
   dataMode: $("dataMode"),
   testBtn: $("testBtn"),
   testResult: $("testResult"),
-  promptList: $("promptList"),
-  addPromptBtn: $("addPromptBtn"),
-  resetPromptsBtn: $("resetPromptsBtn"),
   saveBtn: $("saveSettingsBtn"),
   cancelBtn: $("cancelSettingsBtn"),
   closeBtn: $("closeSettingsBtn"),
   saveError: $("saveError"),
 };
 
-let settings = { tenantUrl: "", hasToken: false, prompts: [], defaultPrompts: [] };
+let settings = { tenantUrl: "", hasToken: false };
 let conversationState = null;
 let busy = false;
 let activeRequest = null;
+let activeWorkflow = null;
+
+const FRONTEND_ACTIONS = [
+  { id: "website-health", label: "Website health", inputLabel: "Frontend application", placeholder: "Application name" },
+  { id: "system-health", label: "System health" },
+  { id: "session-health", label: "Session health", inputLabel: "User tag", placeholder: "User tag or identifier" },
+  { id: "impact-scope", label: "Impact scope", inputLabel: "Reported symptom", placeholder: "What did the user experience?" },
+  { id: "frontend-errors", label: "Frontend errors" },
+  { id: "slow-pages", label: "Slow pages" },
+];
 
 function setStatus(kind, text) {
   els.status.className = `status status-${kind}`;
@@ -68,81 +80,23 @@ function addMessage(kind, content) {
   return div;
 }
 
-function decorateCodeBlocks(container) {
-  container.querySelectorAll("pre").forEach((pre) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn copy-btn";
-    btn.textContent = "Copy";
-    btn.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(pre.querySelector("code")?.textContent || "");
-      btn.textContent = "Copied";
-      setTimeout(() => (btn.textContent = "Copy"), 1500);
-    });
-    pre.appendChild(btn);
-  });
-}
-
 function renderAnswer(div, result) {
   div.innerHTML = window.renderMarkdown(result.text || "_No answer returned._");
-  decorateCodeBlocks(div);
-  if (result.dql || result.queryError) div.prepend(buildDataPanel(result));
 
   if (result.notifications?.length) {
     const box = document.createElement("div");
     box.className = "notifications";
     result.notifications.forEach((n) => {
       const p = document.createElement("div");
-      p.textContent = `${n.severity || "Notice"}: ${n.message || ""}`;
+      p.textContent = `${n.severity || "Notice"}: ${String(n.message || "").replace(/https?:\/\/\S+/g, "")}`;
       box.appendChild(p);
     });
     div.appendChild(box);
   }
 
-  const sources = (result.sources || []).filter((s) => s && s.url);
-  if (sources.length) {
-    const box = document.createElement("div");
-    box.className = "sources";
-    box.textContent = "Sources";
-    const ul = document.createElement("ul");
-    sources.forEach((s) => {
-      const li = document.createElement("li");
-      const a = document.createElement("a");
-      a.href = s.url;
-      a.dataset.external = "1";
-      a.textContent = s.title || s.url;
-      li.appendChild(a);
-      ul.appendChild(li);
-    });
-    box.appendChild(ul);
-    div.appendChild(box);
-  }
 }
 
-function buildDataPanel(result) {
-  const details = document.createElement("details");
-  details.className = "data-panel";
-  const summary = document.createElement("summary");
-  summary.textContent = result.queryError
-    ? `Environment query failed: ${result.queryError}`
-    : `Queried your environment: ${result.recordCount ?? 0} record(s)`;
-  if (result.queryError) {
-    summary.classList.add("error-text");
-    details.open = true;
-  }
-  details.appendChild(summary);
-  if (result.dql) {
-    const pre = document.createElement("pre");
-    const code = document.createElement("code");
-    code.textContent = result.dql;
-    pre.appendChild(code);
-    details.appendChild(pre);
-    decorateCodeBlocks(details);
-  }
-  return details;
-}
-
-async function sendPrompt(text) {
+async function sendPrompt(text, workflow = null, displayText = text) {
   const prompt = String(text || "").trim();
   if (!prompt || busy) return;
   if (!isConfigured()) {
@@ -150,7 +104,7 @@ async function sendPrompt(text) {
     return;
   }
 
-  addMessage("user", prompt);
+  addMessage("user", displayText);
   const aiDiv = addMessage("ai");
   aiDiv.innerHTML = '<span class="progress">Thinking...</span>';
   setBusy(true);
@@ -159,7 +113,7 @@ async function sendPrompt(text) {
   activeRequest = { id: requestId, div: aiDiv, text: "" };
 
   try {
-    const result = await api.send({ requestId, text: prompt, state: conversationState });
+    const result = await api.send({ requestId, text: prompt, state: workflow ? null : conversationState, workflow });
     conversationState = result.state || conversationState;
     renderAnswer(aiDiv, result);
     setStatus("ok", "Connected");
@@ -192,16 +146,34 @@ api.onChatEvent((evt) => {
 
 function renderPromptBar() {
   els.promptBar.innerHTML = "";
-  settings.prompts.forEach((p) => {
+  FRONTEND_ACTIONS.forEach((action) => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "chip";
-    btn.textContent = p.label;
-    btn.title = p.prompt;
+    btn.textContent = action.label;
     btn.disabled = busy;
-    btn.addEventListener("click", () => sendPrompt(p.prompt));
+    btn.addEventListener("click", () => startWorkflow(action));
     els.promptBar.appendChild(btn);
   });
+}
+
+function startWorkflow(action) {
+  if (!action.inputLabel) {
+    sendPrompt(action.label, { id: action.id });
+    return;
+  }
+  activeWorkflow = action;
+  els.workflowTitle.textContent = action.label;
+  els.workflowLabel.textContent = action.inputLabel;
+  els.workflowInput.placeholder = action.placeholder;
+  els.workflowInput.value = "";
+  els.workflowOverlay.classList.remove("hidden");
+  els.workflowInput.focus();
+}
+
+function closeWorkflow() {
+  els.workflowOverlay.classList.add("hidden");
+  activeWorkflow = null;
 }
 
 function newChat() {
@@ -213,47 +185,6 @@ function newChat() {
 
 // Settings dialog
 
-function addPromptRow(p = { label: "", prompt: "" }) {
-  const row = document.createElement("div");
-  row.className = "prompt-item";
-
-  const label = document.createElement("input");
-  label.type = "text";
-  label.placeholder = "Button label";
-  label.maxLength = 60;
-  label.value = p.label;
-  label.className = "prompt-label";
-
-  const prompt = document.createElement("textarea");
-  prompt.rows = 2;
-  prompt.placeholder = "Prompt text sent to Dynatrace Intelligence";
-  prompt.value = p.prompt;
-  prompt.className = "prompt-text";
-
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "btn btn-ghost";
-  remove.textContent = "Remove";
-  remove.addEventListener("click", () => row.remove());
-
-  row.append(label, prompt, remove);
-  els.promptList.appendChild(row);
-}
-
-function renderPromptEditor(prompts) {
-  els.promptList.innerHTML = "";
-  prompts.forEach((p) => addPromptRow(p));
-}
-
-function readPromptEditor() {
-  return [...els.promptList.querySelectorAll(".prompt-item")]
-    .map((row) => ({
-      label: row.querySelector(".prompt-label").value.trim(),
-      prompt: row.querySelector(".prompt-text").value.trim(),
-    }))
-    .filter((p) => p.label && p.prompt);
-}
-
 function openSettings() {
   els.tenantUrl.value = settings.tenantUrl;
   els.token.value = "";
@@ -264,7 +195,6 @@ function openSettings() {
   els.testResult.className = "muted";
   els.saveError.textContent = "";
   els.dataMode.checked = settings.dataMode !== false;
-  renderPromptEditor(settings.prompts);
   els.overlay.classList.remove("hidden");
   els.tenantUrl.focus();
 }
@@ -279,13 +209,13 @@ async function testConnection() {
   els.testResult.textContent = "Testing...";
   try {
     const r = await api.testConnection({ tenantUrl: els.tenantUrl.value, token: els.token.value });
-    if (r.chatAvailable && (r.nl2dqlAvailable || !els.dataMode.checked)) {
+    if (r.chatAvailable && r.nl2dqlAvailable) {
       els.testResult.className = "ok-text";
-      els.testResult.textContent = "Connected. Dynatrace Intelligence chat is available.";
+      els.testResult.textContent = "Connected. Frontend checks can query data and return an analysis.";
     } else if (r.chatAvailable) {
       els.testResult.className = "error-text";
       els.testResult.textContent =
-        "Chat works, but DQL generation is not available. Add davis-copilot:nl2dql:execute or turn off data mode.";
+        "Chat works, but frontend checks require DQL generation. Add davis-copilot:nl2dql:execute.";
     } else {
       els.testResult.className = "error-text";
       els.testResult.textContent = `Connected, but chat is not available for this token. Skills: ${r.skills.join(", ") || "none"}. Check the davis-copilot:conversations:execute scope.`;
@@ -300,7 +230,6 @@ async function testConnection() {
 
 async function saveSettings() {
   els.saveError.textContent = "";
-  const prompts = readPromptEditor();
   if (!els.token.value.trim() && !settings.hasToken) {
     els.saveError.textContent = "A token is required.";
     return;
@@ -312,7 +241,6 @@ async function saveSettings() {
       ...(await api.saveSettings({
         tenantUrl: els.tenantUrl.value,
         token: els.token.value,
-        prompts,
         dataMode: els.dataMode.checked,
       })),
     };
@@ -346,25 +274,26 @@ els.input.addEventListener("input", () => {
   els.input.style.height = `${els.input.scrollHeight}px`;
 });
 
-document.addEventListener("click", (e) => {
-  const link = e.target.closest("a[data-external]");
-  if (!link) return;
-  e.preventDefault();
-  api.openExternal(link.href);
-});
-
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !els.overlay.classList.contains("hidden")) closeSettings();
+  if (e.key === "Escape" && !els.workflowOverlay.classList.contains("hidden")) closeWorkflow();
 });
 
 els.newChatBtn.addEventListener("click", newChat);
 els.settingsBtn.addEventListener("click", openSettings);
 els.closeBtn.addEventListener("click", closeSettings);
+$("cancelWorkflowBtn").addEventListener("click", closeWorkflow);
+els.workflowForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const action = activeWorkflow;
+  const value = els.workflowInput.value.trim();
+  if (!action || !value) return;
+  closeWorkflow();
+  sendPrompt(action.label, { id: action.id, value }, `${action.label}: ${value}`);
+});
 els.cancelBtn.addEventListener("click", closeSettings);
 els.saveBtn.addEventListener("click", saveSettings);
 els.testBtn.addEventListener("click", testConnection);
-els.addPromptBtn.addEventListener("click", () => addPromptRow());
-els.resetPromptsBtn.addEventListener("click", () => renderPromptEditor(settings.defaultPrompts));
 
 (async function init() {
   settings = await api.getSettings();

@@ -13,7 +13,6 @@
       return `\u0000${codes.length - 1}\u0000`;
     });
     s = escapeHtml(s);
-    s = s.replace(/\[([^\]]+)\]\((https:\/\/[^\s)]+)\)/g, (_m, label, url) => `<a href="${url}" data-external="1">${label}</a>`);
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
     s = s.replace(/\u0000(\d+)\u0000/g, (_m, i) => `<code>${escapeHtml(codes[Number(i)])}</code>`);
@@ -21,7 +20,10 @@
   }
 
   function render(md) {
-    const lines = String(md || "").replace(/\r\n/g, "\n").split("\n");
+    const source = String(md || "")
+      .replace(/\[([^\]]+)\]\(https?:\/\/[^\s)]+\)/g, "$1")
+      .replace(/https?:\/\/\S+/g, "");
+    const lines = source.replace(/\r\n/g, "\n").split("\n");
     const out = [];
     let para = [];
     let list = null;

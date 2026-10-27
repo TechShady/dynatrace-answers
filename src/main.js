@@ -29,14 +29,16 @@ const DATA_MODE_INSTRUCTION =
   "Never tell the user to ask an administrator, enable Agentic AI, create or run DQL, or access Dynatrace. " +
   "findings from missing or inconclusive telemetry. When frontend metric summaries are provided, cover both error trends and page " +
   "performance (P75 LCP and INP); do not treat error counts alone as overall health or label aggregate errors as JavaScript exceptions. " +
+  "For a selected frontend, report its computed health_status and its own metric values. Never infer that a frontend is healthy or missing " +
+  "because it does not appear in a fleet ranking. " +
   "If the query failed or returned no usable data, say that frontend health " +
   "could not be assessed from the available telemetry; do not claim the system is healthy or absent.";
 
 const FRONTEND_WORKFLOWS = {
   "website-health": {
     requiresInput: true,
-    question: (value) => `Assess the health and user impact of the frontend application ${JSON.stringify(value)} using its error-rate trend and page performance (LCP and INP) over the latest two hours versus the prior two hours. Identify whether errors or page performance are degraded, and distinguish frontend-wide evidence from user-specific impact.`,
-    hints: "The supplied context contains frontend error/request totals and LCP/INP metrics for two adjacent two-hour periods. Compare both error rates and page performance, and report the actual frontend name. These aggregate errors do not classify JavaScript exceptions; do not claim a specific error type without detailed event data.",
+    question: (value) => `Assess the selected frontend application ${JSON.stringify(value)} using its own metrics. Start with its computed health status, then cite the current and previous error rate, error counts, p75 LCP, and p75 INP. Do not infer this frontend is missing or healthy from fleet ranking lists. Distinguish frontend-wide telemetry from user-specific impact.`,
+    hints: "The supplied context contains the exact selected frontend's computed health_status and direct metric values. Report that status and cite its error rate, error counts, p75 LCP, and p75 INP. Aggregate frontend errors are not JavaScript-exception-specific. If status is inconclusive, explain which measurements are missing and do not call the frontend healthy.",
   },
   "system-health": {
     question: () => "Assess whether errors or page performance issues are widespread across frontends. Compare current versus prior two-hour error rates, LCP, and INP, and identify whether impact is concentrated in one frontend or spans several.",
@@ -321,6 +323,46 @@ function inpStatus(value) {
   return value > 500 ? "poor" : value > 200 ? "needs improvement" : "good";
 }
 
+function assessFrontendHealth(summary) {
+  const missingMetrics = [
+    summary.current_error_rate_percent === null ? "error rate" : null,
+    summary.current_lcp_p75_ms === null ? "LCP p75" : null,
+    summary.current_inp_p75_ms === null ? "INP p75" : null,
+  ].filter(Boolean);
+  if (missingMetrics.length) {
+    return {
+      health_status: "inconclusive",
+      health_reasons: [`Missing current ${missingMetrics.join(", ")} telemetry.`],
+    };
+  }
+
+  const reasons = [];
+  if (summary.current_error_rate_percent > 1) {
+    reasons.push(`Error rate ${summary.current_error_rate_percent}% exceeds the 1% review threshold.`);
+  }
+  if (summary.current_lcp_p75_status === "poor") {
+    reasons.push(`P75 LCP is ${summary.current_lcp_p75_ms} ms, above the 4,000 ms poor threshold.`);
+  } else if (summary.current_lcp_p75_status === "needs improvement") {
+    reasons.push(`P75 LCP is ${summary.current_lcp_p75_ms} ms, above the 2,500 ms good threshold.`);
+  }
+  if (summary.current_inp_p75_status === "poor") {
+    reasons.push(`P75 INP is ${summary.current_inp_p75_ms} ms, above the 500 ms poor threshold.`);
+  } else if (summary.current_inp_p75_status === "needs improvement") {
+    reasons.push(`P75 INP is ${summary.current_inp_p75_ms} ms, above the 200 ms good threshold.`);
+  }
+  if (summary.error_rate_change_percentage_points !== null && summary.error_rate_change_percentage_points >= 0.5) {
+    reasons.push(`Error rate increased ${summary.error_rate_change_percentage_points} percentage points versus the prior period.`);
+  }
+
+  const degraded = summary.current_error_rate_percent > 1 ||
+    summary.current_lcp_p75_status === "poor" ||
+    summary.current_inp_p75_status === "poor";
+  return {
+    health_status: degraded ? "degraded" : reasons.length ? "watch" : "healthy",
+    health_reasons: reasons.length ? reasons : ["Error rate, P75 LCP, and P75 INP are within the configured thresholds."],
+  };
+}
+
 function summarizeFrontendMetricTrend(current, previous) {
   const previousErrors = numericMetric(previous, "errors");
   const currentErrors = numericMetric(current, "errors");
@@ -333,7 +375,7 @@ function summarizeFrontendMetricTrend(current, previous) {
   const previousRate = previousErrors !== null && previousRequests > 0 ? (previousErrors / previousRequests) * 100 : null;
   const currentRate = currentErrors !== null && currentRequests > 0 ? (currentErrors / currentRequests) * 100 : null;
 
-  return {
+  const summary = {
     frontend_name: current["frontend.name"],
     comparison: "latest 2 hours versus previous 2 hours",
     previous_error_count: previousErrors,
@@ -357,6 +399,7 @@ function summarizeFrontendMetricTrend(current, previous) {
     current_inp_p75_ms: currentInp === null ? null : Math.round(currentInp),
     current_inp_p75_status: inpStatus(currentInp),
   };
+  return { ...summary, ...assessFrontendHealth(summary) };
 }
 
 function compactFrontendMetricSummary(summary) {
@@ -372,6 +415,8 @@ function compactFrontendMetricSummary(summary) {
     current_lcp_p75_status: summary.current_lcp_p75_status,
     current_inp_p75_ms: summary.current_inp_p75_ms,
     current_inp_p75_status: summary.current_inp_p75_status,
+    health_status: summary.health_status,
+    health_reasons: summary.health_reasons,
   };
 }
 
@@ -466,6 +511,8 @@ async function queryEnvironment(creds, question, emit, workflow) {
           ? [{
               requested_frontend: workflow.value,
               metric_series_found: false,
+              health_status: "inconclusive",
+              health_reasons: ["No metric series was returned for the selected frontend in the analyzed period."],
               available_frontends: summaries.map((summary) => summary.frontend_name).slice(0, 50),
             }]
           : [];

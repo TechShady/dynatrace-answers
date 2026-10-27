@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("oncall", {
   testConnection: (settings) => ipcRenderer.invoke("connection:test", settings),
   getFrontends: () => ipcRenderer.invoke("frontends:list"),
   send: (request) => ipcRenderer.invoke("chat:send", request),
+  exportPdf: (request) => ipcRenderer.invoke("chat:export-pdf", request),
   onChatEvent: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on("chat:event", handler);

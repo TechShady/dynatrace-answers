@@ -11,6 +11,7 @@ const els = {
   input: $("input"),
   sendBtn: $("sendBtn"),
   newChatBtn: $("newChatBtn"),
+  exportPdfBtn: $("exportPdfBtn"),
   settingsBtn: $("settingsBtn"),
   status: $("connectionStatus"),
   workflowOverlay: $("workflowOverlay"),
@@ -23,6 +24,8 @@ const els = {
   frontendOptions: $("frontendOptions"),
   frontendStatus: $("frontendStatus"),
   workflowRunBtn: $("workflowRunBtn"),
+  sessionConsentRow: $("sessionConsentRow"),
+  sessionConsent: $("sessionConsent"),
   overlay: $("settingsOverlay"),
   tenantUrl: $("tenantUrl"),
   token: $("token"),
@@ -49,7 +52,8 @@ let activeFrontendIndex = -1;
 const FRONTEND_ACTIONS = [
   { id: "website-health", label: "Website health", inputLabel: "Frontend application", placeholder: "Application name" },
   { id: "system-health", label: "System health" },
-  { id: "session-health", label: "Session health", inputLabel: "User tag", placeholder: "User tag or identifier" },
+  { id: "guided-triage", label: "Guided triage", inputLabel: "Reported symptom", placeholder: "What did the caller report?" },
+  { id: "session-health", label: "Session health", inputLabel: "User tag", placeholder: "User tag or identifier", requiresConsent: true },
   {
     id: "impact-scope",
     label: "Impact scope",
@@ -86,7 +90,12 @@ function setBusy(value) {
   busy = value;
   els.sendBtn.disabled = value;
   els.newChatBtn.disabled = value;
+  updateExportButton();
   els.promptBar.querySelectorAll("button").forEach((b) => (b.disabled = value));
+}
+
+function updateExportButton() {
+  els.exportPdfBtn.disabled = busy || !els.messages.querySelector(".msg-user, .msg-ai, .msg-error");
 }
 
 function scrollToBottom() {
@@ -97,8 +106,10 @@ function addMessage(kind, content) {
   els.emptyState.classList.add("hidden");
   const div = document.createElement("div");
   div.className = `msg msg-${kind}`;
+  div.dataset.timestamp = new Date().toISOString();
   if (content !== undefined) div.textContent = content;
   els.messages.appendChild(div);
+  updateExportButton();
   scrollToBottom();
   return div;
 }
@@ -197,7 +208,10 @@ function startWorkflow(action) {
   els.workflowLabel.textContent = action.inputLabel;
   const isFrontendPicker = action.id === "website-health";
   const hasOptions = Array.isArray(action.options);
+  const requiresConsent = Boolean(action.requiresConsent);
   els.frontendPicker.classList.toggle("hidden", !isFrontendPicker);
+  els.sessionConsentRow.classList.toggle("hidden", !requiresConsent);
+  els.sessionConsent.checked = false;
   els.workflowSelect.classList.toggle("hidden", !hasOptions);
   els.workflowInput.classList.toggle("hidden", hasOptions);
   els.workflowInput.required = !hasOptions;
@@ -236,7 +250,7 @@ function startWorkflow(action) {
   selectedFrontend = null;
   filteredFrontends = [];
   activeFrontendIndex = -1;
-  els.workflowRunBtn.disabled = isFrontendPicker || hasOptions;
+  els.workflowRunBtn.disabled = isFrontendPicker || hasOptions || requiresConsent;
   els.workflowOverlay.classList.remove("hidden");
   if (hasOptions) els.workflowSelect.focus();
   else els.workflowInput.focus();
@@ -315,7 +329,33 @@ function newChat() {
   conversationState = null;
   els.messages.querySelectorAll(".msg").forEach((m) => m.remove());
   els.emptyState.classList.remove("hidden");
+  updateExportButton();
   els.input.focus();
+}
+
+async function exportChatPdf() {
+  const messages = [...els.messages.querySelectorAll(".msg")].map((element) => ({
+    role: element.classList.contains("msg-user") ? "user" :
+      element.classList.contains("msg-ai") ? "assistant" :
+      element.classList.contains("msg-error") ? "error" : null,
+    text: element.innerText.trim(),
+    timestamp: element.dataset.timestamp,
+  })).filter((message) => message.role && message.text);
+  if (!messages.length || busy) return;
+
+  const originalLabel = els.exportPdfBtn.textContent;
+  els.exportPdfBtn.disabled = true;
+  try {
+    const result = await api.exportPdf({ messages });
+    if (!result.canceled) {
+      els.exportPdfBtn.textContent = "PDF saved";
+      setTimeout(() => { els.exportPdfBtn.textContent = originalLabel; }, 1800);
+    }
+  } catch (err) {
+    addMessage("error", `PDF export failed: ${cleanError(err)}`);
+  } finally {
+    updateExportButton();
+  }
 }
 
 // Settings dialog
@@ -413,6 +453,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 els.newChatBtn.addEventListener("click", newChat);
+els.exportPdfBtn.addEventListener("click", exportChatPdf);
 els.settingsBtn.addEventListener("click", openSettings);
 els.closeBtn.addEventListener("click", closeSettings);
 $("cancelWorkflowBtn").addEventListener("click", closeWorkflow);
@@ -424,7 +465,11 @@ els.workflowForm.addEventListener("submit", (e) => {
     : action?.options ? els.workflowSelect.value : els.workflowInput.value.trim();
   if (!action || !value) return;
   closeWorkflow();
-  sendPrompt(action.label, { id: action.id, value }, `${action.label}: ${value}`);
+  sendPrompt(action.label, {
+    id: action.id,
+    value,
+    ...(action.requiresConsent ? { consent: els.sessionConsent.checked } : {}),
+  }, `${action.label}: ${value}`);
 });
 els.workflowInput.addEventListener("input", () => {
   if (activeWorkflow?.id !== "website-health") return;
@@ -449,6 +494,16 @@ els.workflowInput.addEventListener("keydown", (event) => {
 });
 els.workflowSelect.addEventListener("change", () => {
   els.workflowRunBtn.disabled = !els.workflowSelect.value;
+});
+els.workflowInput.addEventListener("input", () => {
+  if (activeWorkflow?.requiresConsent) {
+    els.workflowRunBtn.disabled = !els.workflowInput.value.trim() || !els.sessionConsent.checked;
+  }
+});
+els.sessionConsent.addEventListener("change", () => {
+  if (activeWorkflow?.requiresConsent) {
+    els.workflowRunBtn.disabled = !els.workflowInput.value.trim() || !els.sessionConsent.checked;
+  }
 });
 els.cancelBtn.addEventListener("click", closeSettings);
 els.saveBtn.addEventListener("click", saveSettings);

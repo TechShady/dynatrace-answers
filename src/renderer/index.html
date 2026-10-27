@@ -18,6 +18,7 @@
       <div class="topbar-right">
         <span id="connectionStatus" class="status status-unknown">Not configured</span>
         <button id="newChatBtn" class="btn btn-ghost" type="button">New chat</button>
+        <button id="exportPdfBtn" class="btn btn-ghost" type="button" title="Save this conversation as a PDF" disabled>Export PDF</button>
         <button id="settingsBtn" class="btn btn-ghost" type="button">Settings</button>
       </div>
     </header>
@@ -51,7 +52,7 @@
           <h2 id="workflowTitle"></h2>
         </div>
         <div class="dialog-body">
-          <label class="field">
+          <div class="field">
             <span id="workflowLabel"></span>
             <input id="workflowInput" type="text" maxlength="500" autocomplete="off" required />
             <select id="workflowSelect" class="hidden"></select>
@@ -59,7 +60,11 @@
               <ul id="frontendOptions" class="frontend-options" role="listbox" aria-label="Frontends"></ul>
               <p id="frontendStatus" class="frontend-status muted" aria-live="polite"></p>
             </div>
-          </label>
+            <div id="sessionConsentRow" class="toggle session-consent hidden">
+              <input id="sessionConsent" type="checkbox" />
+              <label for="sessionConsent">I have permission to share this user tag and matching session data with Dynatrace Intelligence.</label>
+            </div>
+          </div>
         </div>
         <div class="dialog-footer">
           <button id="cancelWorkflowBtn" class="btn btn-ghost" type="button">Cancel</button>

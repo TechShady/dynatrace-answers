@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, safeStorage, Menu } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, Menu } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -21,6 +21,12 @@ const FRONTEND_HEALTH_PREVIOUS_METRICS_DQL = `${FRONTEND_HEALTH_METRICS_DQL}, sh
 const FRONTEND_LIST_DQL =
   "timeseries requests = sum(dt.frontend.request.count, scalar: true), " +
   "by:{frontend.name}, from:now()-24h";
+const FRONTEND_PROBLEMS_DQL =
+  "fetch dt.davis.problems, from:now()-4h\n" +
+  "| filter not(dt.davis.is_duplicate)\n" +
+  "| fields event.start, display_id, event.name, event.category, event.status, dt.davis.affected_users_count, root_cause_entity_name\n" +
+  "| sort event.start desc\n" +
+  "| limit 50";
 
 const DATA_MODE_INSTRUCTION =
   "You are assisting an on-call engineer who cannot access the Dynatrace UI. Use the supplementary context and its query results " +
@@ -31,6 +37,7 @@ const DATA_MODE_INSTRUCTION =
   "performance (P75 LCP and INP); do not treat error counts alone as overall health or label aggregate errors as JavaScript exceptions. " +
   "For a selected frontend, report its computed health_status and its own metric values. Never infer that a frontend is healthy or missing " +
   "because it does not appear in a fleet ranking. " +
+  "Report telemetry coverage/confidence. Recent Davis problems are context only: do not claim causation from time overlap, and only call a problem directly related when its affected frontend or root-cause name explicitly matches. No deployment/change data is provided unless included in the context. " +
   "If the query failed or returned no usable data, say that frontend health " +
   "could not be assessed from the available telemetry; do not claim the system is healthy or absent.";
 
@@ -44,8 +51,14 @@ const FRONTEND_WORKFLOWS = {
     question: () => "Assess whether errors or page performance issues are widespread across frontends. Compare current versus prior two-hour error rates, LCP, and INP, and identify whether impact is concentrated in one frontend or spans several.",
     hints: "The context includes error/request trends and page performance metrics for each frontend. Cover both errors and LCP/INP; distinguish aggregate frontend errors from JavaScript exceptions.",
   },
+  "guided-triage": {
+    requiresInput: true,
+    question: (value) => `A caller reports: ${JSON.stringify(value)}. Triage the current frontend error and performance metrics across all frontends. Identify the most likely impact scope, distinguish confirmed evidence from possible overlap with Davis problems, and state what remains unknown.`,
+    hints: "Use the supplied fleet metrics, coverage confidence, and recent Davis problem context. Start with the affected frontends and scope; state when a problem is only temporally nearby rather than directly matched. Do not invent deployment events or user counts.",
+  },
   "session-health": {
     requiresInput: true,
+    requiresConsent: true,
     question: (value) => `Assess the recent health for user tag ${JSON.stringify(value)}. Report matching session errors where available, plus error trends and LCP/INP for the frontend applications used by those sessions. Distinguish session-specific findings from frontend-wide impact.`,
     hints: "The context includes user.sessions matched by dt.rum.user_tag and frontend metric comparisons. Cover both session errors and frontend error/performance metrics. user.sessions records may lag by 30+ minutes; do not interpret missing recent sessions as proof of no user impact.",
   },
@@ -306,6 +319,35 @@ function buildSupplementary(question, dql, records, error) {
   return `${header}\nResults (${note}):\n${json}${coverage}`;
 }
 
+function escapePdfHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildPdfHtml(messages) {
+  const generatedAt = new Date().toLocaleString();
+  const transcript = messages.map((message) => {
+    const role = message.role === "assistant" ? "Dynatrace Intelligence" : message.role === "error" ? "Error" : "On-call";
+    const timestamp = message.timestamp ? new Date(message.timestamp).toLocaleString() : "";
+    return `<article><header><strong>${role}</strong><time>${escapePdfHtml(timestamp)}</time></header><pre>${escapePdfHtml(message.text)}</pre></article>`;
+  }).join("");
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Dynatrace OnCall Case Notes</title><style>
+    @page { size: A4; margin: 18mm; }
+    body { color: #172033; font: 10.5pt/1.5 "Segoe UI", Arial, sans-serif; }
+    h1 { margin: 0 0 4pt; font-size: 19pt; }
+    .generated { color: #526071; font-size: 9pt; margin-bottom: 20pt; }
+    article { break-inside: avoid; border: 1px solid #d5dce5; border-radius: 5px; margin: 0 0 12pt; padding: 10pt 12pt; }
+    header { display: flex; justify-content: space-between; gap: 12pt; border-bottom: 1px solid #e4e9ef; padding-bottom: 5pt; margin-bottom: 7pt; }
+    time { color: #526071; font-size: 8.5pt; }
+    pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  </style></head><body><h1>Dynatrace OnCall Case Notes</h1><div class="generated">Exported ${escapePdfHtml(generatedAt)}</div>${transcript}</body></html>`;
+}
+
 function numericMetric(record, field) {
   const rawValue = record?.[field];
   if (rawValue === null || rawValue === undefined || rawValue === "") return null;
@@ -324,15 +366,26 @@ function inpStatus(value) {
 }
 
 function assessFrontendHealth(summary) {
-  const missingMetrics = [
+  const missingCurrentMetrics = [
     summary.current_error_rate_percent === null ? "error rate" : null,
     summary.current_lcp_p75_ms === null ? "LCP p75" : null,
     summary.current_inp_p75_ms === null ? "INP p75" : null,
   ].filter(Boolean);
-  if (missingMetrics.length) {
+  const missingPreviousMetrics = [
+    summary.previous_error_rate_percent === null ? "error rate" : null,
+    summary.previous_lcp_p75_ms === null ? "LCP p75" : null,
+    summary.previous_inp_p75_ms === null ? "INP p75" : null,
+  ].filter(Boolean);
+  const coverageStatus = missingCurrentMetrics.length
+    ? "insufficient"
+    : missingPreviousMetrics.length ? "partial" : "complete";
+  if (missingCurrentMetrics.length) {
     return {
       health_status: "inconclusive",
-      health_reasons: [`Missing current ${missingMetrics.join(", ")} telemetry.`],
+      coverage_status: coverageStatus,
+      missing_current_metrics: missingCurrentMetrics,
+      missing_previous_metrics: missingPreviousMetrics,
+      health_reasons: [`Missing current ${missingCurrentMetrics.join(", ")} telemetry.`],
     };
   }
 
@@ -353,12 +406,18 @@ function assessFrontendHealth(summary) {
   if (summary.error_rate_change_percentage_points !== null && summary.error_rate_change_percentage_points >= 0.5) {
     reasons.push(`Error rate increased ${summary.error_rate_change_percentage_points} percentage points versus the prior period.`);
   }
+  if (missingPreviousMetrics.length) {
+    reasons.push(`Prior-period ${missingPreviousMetrics.join(", ")} telemetry is missing; comparison confidence is limited.`);
+  }
 
   const degraded = summary.current_error_rate_percent > 1 ||
     summary.current_lcp_p75_status === "poor" ||
     summary.current_inp_p75_status === "poor";
   return {
-    health_status: degraded ? "degraded" : reasons.length ? "watch" : "healthy",
+    health_status: degraded ? "degraded" : missingPreviousMetrics.length ? "inconclusive" : reasons.length ? "watch" : "healthy",
+    coverage_status: coverageStatus,
+    missing_current_metrics: missingCurrentMetrics,
+    missing_previous_metrics: missingPreviousMetrics,
     health_reasons: reasons.length ? reasons : ["Error rate, P75 LCP, and P75 INP are within the configured thresholds."],
   };
 }
@@ -416,6 +475,9 @@ function compactFrontendMetricSummary(summary) {
     current_inp_p75_ms: summary.current_inp_p75_ms,
     current_inp_p75_status: summary.current_inp_p75_status,
     health_status: summary.health_status,
+    coverage_status: summary.coverage_status,
+    missing_current_metrics: summary.missing_current_metrics,
+    missing_previous_metrics: summary.missing_previous_metrics,
     health_reasons: summary.health_reasons,
   };
 }
@@ -435,6 +497,38 @@ function prioritizeFrontendMetrics(summaries) {
     largest_error_rate_increases: top((summary) => summary.error_rate_change_percentage_points),
     slowest_lcp_p75: top((summary) => summary.current_lcp_p75_ms),
     slowest_inp_p75: top((summary) => summary.current_inp_p75_ms),
+  };
+}
+
+function buildDavisProblemContext(problems, selectedFrontend, queryError) {
+  const toSummary = (problem) => ({
+    problem_id: problem.display_id,
+    started_at: problem["event.start"],
+    name: problem["event.name"],
+    category: problem["event.category"],
+    status: problem["event.status"],
+    affected_users: numericMetric(problem, "dt.davis.affected_users_count"),
+    root_cause: problem.root_cause_entity_name,
+  });
+  const selectedName = String(selectedFrontend || "").toLowerCase();
+  const directlyNameMatched = selectedName
+    ? problems.filter((problem) =>
+        [problem["event.name"], problem.root_cause_entity_name]
+          .some((value) => String(value || "").toLowerCase().includes(selectedName))
+      )
+    : [];
+
+  return {
+    query_status: queryError ? "unavailable" : "queried",
+    query_error: queryError || undefined,
+    recent_problem_count: problems.length,
+    directly_name_matched_problems: directlyNameMatched.map(toSummary),
+    other_recent_problems: problems
+      .filter((problem) => !directlyNameMatched.includes(problem))
+      .slice(0, 5)
+      .map(toSummary),
+    relationship_note: "A matching name is a lead to review, not proof of cause. Time overlap alone does not establish a relationship.",
+    deployment_change_context: "No deployment/change events were queried; do not attribute symptoms to a deployment.",
   };
 }
 
@@ -459,6 +553,7 @@ function resolveFrontendWorkflow(input) {
   if (!definition) throw new Error("Unknown frontend check.");
   const value = String(input.value || "").trim().slice(0, 500);
   if (definition.requiresInput && !value) throw new Error("Enter the requested frontend or user details.");
+  if (definition.requiresConsent && input.consent !== true) throw new Error("Confirm permission before sending the user tag for analysis.");
   if (definition.options && !definition.options.includes(value)) throw new Error("Select a symptom from the list.");
   return {
     question: definition.question(value),
@@ -491,6 +586,13 @@ async function queryEnvironment(creds, question, emit, workflow) {
       dql = `${FRONTEND_HEALTH_METRICS_DQL}\n\n${FRONTEND_HEALTH_PREVIOUS_METRICS_DQL}`;
       const metricRecords = await runDql(creds, FRONTEND_HEALTH_METRICS_DQL);
       const previousMetricRecords = await runDql(creds, FRONTEND_HEALTH_PREVIOUS_METRICS_DQL);
+      let davisProblems = [];
+      let davisProblemQueryError = null;
+      try {
+        davisProblems = await runDql(creds, FRONTEND_PROBLEMS_DQL, 50);
+      } catch (err) {
+        davisProblemQueryError = err.message;
+      }
       const previousMetricsByFrontend = new Map(previousMetricRecords
         .filter((record) => record["frontend.name"])
         .map((record) => [String(record["frontend.name"]).toLowerCase(), record]));
@@ -505,8 +607,9 @@ async function queryEnvironment(creds, question, emit, workflow) {
       if (workflow.id === "website-health") {
         const requestedName = workflow.value.toLowerCase();
         const match = summaries.find((summary) => summary.frontend_name.toLowerCase() === requestedName);
+        const davisProblemContext = buildDavisProblemContext(davisProblems, workflow.value, davisProblemQueryError);
         records = match
-          ? [match]
+          ? [{ ...match, davis_problem_context: davisProblemContext }]
           : metricRecords.length
           ? [{
               requested_frontend: workflow.value,
@@ -514,8 +617,15 @@ async function queryEnvironment(creds, question, emit, workflow) {
               health_status: "inconclusive",
               health_reasons: ["No metric series was returned for the selected frontend in the analyzed period."],
               available_frontends: summaries.map((summary) => summary.frontend_name).slice(0, 50),
+              davis_problem_context: davisProblemContext,
             }]
-          : [];
+          : [{
+              requested_frontend: workflow.value,
+              metric_series_found: false,
+              health_status: "inconclusive",
+              health_reasons: ["The frontend metrics query returned no series; health cannot be assessed."],
+              davis_problem_context: davisProblemContext,
+            }];
       } else if (workflow.id === "session-health") {
         emit({ type: "progress", message: "Checking the tagged user session..." });
         const sessionDql = `fetch user.sessions, from:now()-32h, to:now()\n` +
@@ -542,12 +652,14 @@ async function queryEnvironment(creds, question, emit, workflow) {
             .filter((summary) => sessionFrontendNames.includes(summary.frontend_name.toLowerCase()))
             .map(compactFrontendMetricSummary),
           overall_frontend_health: prioritizeFrontendMetrics(summaries),
+          davis_problem_context: buildDavisProblemContext(davisProblems, null, davisProblemQueryError),
         }];
       } else {
         records = [{
           workflow: workflow.id,
           ...(workflow.id === "impact-scope" ? { reported_symptom: workflow.value } : {}),
           ...prioritizeFrontendMetrics(summaries),
+          davis_problem_context: buildDavisProblemContext(davisProblems, null, davisProblemQueryError),
         }];
       }
 
@@ -672,6 +784,45 @@ function registerIpc() {
       }
     );
     return { ...answer, sources: [] };
+  });
+
+  ipcMain.handle("chat:export-pdf", async (_event, input) => {
+    const messages = (Array.isArray(input?.messages) ? input.messages : [])
+      .slice(-200)
+      .filter((message) => message && ["user", "assistant", "error"].includes(message.role))
+      .map((message) => ({
+        role: message.role,
+        text: String(message.text || "").slice(0, 30000),
+        timestamp: String(message.timestamp || ""),
+      }))
+      .filter((message) => message.text.trim());
+    if (!messages.length) throw new Error("There is no chat content to export.");
+
+    const saveResult = await dialog.showSaveDialog(mainWindow, {
+      title: "Export On-call Chat",
+      defaultPath: path.join(app.getPath("downloads"), `Dynatrace-OnCall-Case-${new Date().toISOString().slice(0, 10)}.pdf`),
+      filters: [{ name: "PDF document", extensions: ["pdf"] }],
+    });
+    if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
+
+    const pdfWindow = new BrowserWindow({
+      width: 900,
+      height: 1200,
+      show: false,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    try {
+      await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(buildPdfHtml(messages))}`);
+      const pdf = await pdfWindow.webContents.printToPDF({
+        pageSize: "A4",
+        printBackground: true,
+        margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 },
+      });
+      fs.writeFileSync(saveResult.filePath, pdf);
+      return { canceled: false, filePath: saveResult.filePath };
+    } finally {
+      if (!pdfWindow.isDestroyed()) pdfWindow.close();
+    }
   });
 
 }

@@ -18,11 +18,15 @@ const FRONTEND_HEALTH_METRICS_DQL =
   "inp_p75 = percentile(dt.frontend.web.page.interaction_to_next_paint, 75, scalar: true), " +
   "by:{frontend.name}, from:now()-2h";
 const FRONTEND_HEALTH_PREVIOUS_METRICS_DQL = `${FRONTEND_HEALTH_METRICS_DQL}, shift:-2h`;
+const FRONTEND_LIST_DQL =
+  "timeseries requests = sum(dt.frontend.request.count, scalar: true), " +
+  "by:{frontend.name}, from:now()-24h";
 
 const DATA_MODE_INSTRUCTION =
   "You are assisting an on-call engineer who cannot access the Dynatrace UI. Use the supplementary context and its query results " +
   "to give a concise, evidence-based answer with concrete frontend names, counts, time ranges, and user impact. Never include DQL, " +
   "query text, URLs, links, or instructions to open or operate the Dynatrace UI. Do not suggest UI steps. Distinguish confirmed " +
+  "Never tell the user to ask an administrator, enable Agentic AI, create or run DQL, or access Dynatrace. " +
   "findings from missing or inconclusive telemetry. When frontend metric summaries are provided, cover both error trends and page " +
   "performance (P75 LCP and INP); do not treat error counts alone as overall health or label aggregate errors as JavaScript exceptions. " +
   "If the query failed or returned no usable data, say that frontend health " +
@@ -45,6 +49,16 @@ const FRONTEND_WORKFLOWS = {
   },
   "impact-scope": {
     requiresInput: true,
+    options: [
+      "Slow page load",
+      "Slow or unresponsive interactions",
+      "JavaScript errors or broken controls",
+      "Failed requests or API errors",
+      "Blank page or navigation failure",
+      "Login or authentication problems",
+      "Visual layout or missing content",
+      "Other or not yet known",
+    ],
     question: (value) => `An end user reported this frontend symptom: ${JSON.stringify(value)}. Use error trends and page performance (LCP/INP) to determine whether the telemetry points to one frontend or a broader issue. State whether it can establish impact to one user/session versus many.`,
     hints: "The context contains frontend error/request trends and LCP/INP by application. Compare both error and performance signals across applications. Do not infer user/session counts from aggregate metrics.",
   },
@@ -244,7 +258,7 @@ async function generateDql(creds, text) {
   return json.dql;
 }
 
-async function runDql(creds, query) {
+async function runDql(creds, query, maxResultRecords = QUERY_MAX_RECORDS) {
   const post = (path, body) =>
     callDynatrace(
       creds,
@@ -260,7 +274,7 @@ async function runDql(creds, query) {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     locale: "en_US",
     requestTimeoutMilliseconds: 30000,
-    maxResultRecords: QUERY_MAX_RECORDS,
+    maxResultRecords,
   });
   for (let i = 0; (r.state === "RUNNING" || r.state === "NOT_STARTED") && r.requestToken; i++) {
     if (i >= QUERY_POLL_LIMIT) throw new Error("The DQL query took too long to complete.");
@@ -400,6 +414,7 @@ function resolveFrontendWorkflow(input) {
   if (!definition) throw new Error("Unknown frontend check.");
   const value = String(input.value || "").trim().slice(0, 500);
   if (definition.requiresInput && !value) throw new Error("Enter the requested frontend or user details.");
+  if (definition.options && !definition.options.includes(value)) throw new Error("Select a symptom from the list.");
   return {
     question: definition.question(value),
     hints: definition.hints,
@@ -556,6 +571,13 @@ function registerIpc() {
     );
     const skills = Array.isArray(data?.skills) ? data.skills : [];
     return { skills, chatAvailable: skills.includes("conversation"), nl2dqlAvailable: skills.includes("nl2dql") };
+  });
+
+  ipcMain.handle("frontends:list", async () => {
+    const creds = resolveCredentials();
+    const records = await runDql(creds, FRONTEND_LIST_DQL, 1000);
+    return [...new Set(records.map((record) => String(record["frontend.name"] || "").trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   });
 
   ipcMain.handle("chat:send", async (event, request) => {

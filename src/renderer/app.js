@@ -18,6 +18,11 @@ const els = {
   workflowTitle: $("workflowTitle"),
   workflowLabel: $("workflowLabel"),
   workflowInput: $("workflowInput"),
+  workflowSelect: $("workflowSelect"),
+  frontendPicker: $("frontendPicker"),
+  frontendOptions: $("frontendOptions"),
+  frontendStatus: $("frontendStatus"),
+  workflowRunBtn: $("workflowRunBtn"),
   overlay: $("settingsOverlay"),
   tenantUrl: $("tenantUrl"),
   token: $("token"),
@@ -36,12 +41,30 @@ let conversationState = null;
 let busy = false;
 let activeRequest = null;
 let activeWorkflow = null;
+let frontendNames = [];
+let filteredFrontends = [];
+let selectedFrontend = null;
+let activeFrontendIndex = -1;
 
 const FRONTEND_ACTIONS = [
   { id: "website-health", label: "Website health", inputLabel: "Frontend application", placeholder: "Application name" },
   { id: "system-health", label: "System health" },
   { id: "session-health", label: "Session health", inputLabel: "User tag", placeholder: "User tag or identifier" },
-  { id: "impact-scope", label: "Impact scope", inputLabel: "Reported symptom", placeholder: "What did the user experience?" },
+  {
+    id: "impact-scope",
+    label: "Impact scope",
+    inputLabel: "Reported symptom",
+    options: [
+      "Slow page load",
+      "Slow or unresponsive interactions",
+      "JavaScript errors or broken controls",
+      "Failed requests or API errors",
+      "Blank page or navigation failure",
+      "Login or authentication problems",
+      "Visual layout or missing content",
+      "Other or not yet known",
+    ],
+  },
   { id: "frontend-errors", label: "Frontend errors" },
   { id: "slow-pages", label: "Slow pages" },
 ];
@@ -80,8 +103,15 @@ function addMessage(kind, content) {
   return div;
 }
 
+function sanitizeAnswer(text) {
+  return String(text || "")
+    .replace(/If you want help with creating DQL queries,\s*ask your admin to enable Agentic AI\.?/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function renderAnswer(div, result) {
-  div.innerHTML = window.renderMarkdown(result.text || "_No answer returned._");
+  div.innerHTML = window.renderMarkdown(sanitizeAnswer(result.text) || "_No answer returned._");
 
   if (result.notifications?.length) {
     const box = document.createElement("div");
@@ -139,7 +169,7 @@ api.onChatEvent((evt) => {
     activeRequest.div.appendChild(span);
   } else if (evt.type === "tokens") {
     activeRequest.text += evt.text;
-    activeRequest.div.innerHTML = window.renderMarkdown(activeRequest.text);
+    activeRequest.div.innerHTML = window.renderMarkdown(sanitizeAnswer(activeRequest.text));
   }
   scrollToBottom();
 });
@@ -165,15 +195,120 @@ function startWorkflow(action) {
   activeWorkflow = action;
   els.workflowTitle.textContent = action.label;
   els.workflowLabel.textContent = action.inputLabel;
-  els.workflowInput.placeholder = action.placeholder;
+  const isFrontendPicker = action.id === "website-health";
+  const hasOptions = Array.isArray(action.options);
+  els.frontendPicker.classList.toggle("hidden", !isFrontendPicker);
+  els.workflowSelect.classList.toggle("hidden", !hasOptions);
+  els.workflowInput.classList.toggle("hidden", hasOptions);
+  els.workflowInput.required = !hasOptions;
+  els.workflowSelect.required = hasOptions;
+  els.workflowSelect.innerHTML = "";
+  if (hasOptions) {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Select a symptom...";
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    els.workflowSelect.appendChild(placeholder);
+    action.options.forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      els.workflowSelect.appendChild(option);
+    });
+  }
+  els.workflowInput.placeholder = isFrontendPicker ? "Search frontends..." : action.placeholder || "";
+  els.workflowInput.setAttribute("aria-label", action.inputLabel);
+  if (isFrontendPicker) {
+    els.workflowInput.setAttribute("role", "combobox");
+    els.workflowInput.setAttribute("aria-autocomplete", "list");
+    els.workflowInput.setAttribute("aria-controls", "frontendOptions");
+    els.workflowInput.setAttribute("aria-expanded", "false");
+  } else {
+    els.workflowInput.removeAttribute("role");
+    els.workflowInput.removeAttribute("aria-autocomplete");
+    els.workflowInput.removeAttribute("aria-controls");
+    els.workflowInput.removeAttribute("aria-expanded");
+    els.workflowInput.removeAttribute("aria-activedescendant");
+  }
   els.workflowInput.value = "";
+  els.workflowSelect.value = "";
+  selectedFrontend = null;
+  filteredFrontends = [];
+  activeFrontendIndex = -1;
+  els.workflowRunBtn.disabled = isFrontendPicker || hasOptions;
   els.workflowOverlay.classList.remove("hidden");
+  if (hasOptions) els.workflowSelect.focus();
+  else els.workflowInput.focus();
+  if (isFrontendPicker) loadFrontendOptions(action);
+}
+
+async function loadFrontendOptions(action) {
+  els.frontendStatus.textContent = "Loading frontends...";
+  els.workflowInput.disabled = true;
+  try {
+    const names = await api.getFrontends();
+    if (activeWorkflow !== action) return;
+    frontendNames = Array.isArray(names) ? names : [];
+    renderFrontendOptions();
+  } catch (err) {
+    if (activeWorkflow !== action) return;
+    frontendNames = [];
+    els.frontendOptions.innerHTML = "";
+    els.frontendStatus.textContent = `Could not load frontends: ${cleanError(err)}`;
+  } finally {
+    if (activeWorkflow === action) els.workflowInput.disabled = false;
+  }
+}
+
+function renderFrontendOptions() {
+  const search = els.workflowInput.value.trim().toLocaleLowerCase();
+  const matches = frontendNames.filter((name) => name.toLocaleLowerCase().includes(search));
+  filteredFrontends = matches.slice(0, 100);
+  activeFrontendIndex = filteredFrontends.length ? Math.min(activeFrontendIndex, filteredFrontends.length - 1) : -1;
+  els.frontendOptions.innerHTML = "";
+
+  filteredFrontends.forEach((name, index) => {
+    const option = document.createElement("li");
+    option.id = `frontend-option-${index}`;
+    option.className = `frontend-option${index === activeFrontendIndex ? " active" : ""}`;
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(name === selectedFrontend));
+    option.textContent = name;
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("click", () => selectFrontend(name));
+    els.frontendOptions.appendChild(option);
+  });
+
+  els.frontendOptions.classList.toggle("hidden", Boolean(selectedFrontend));
+  els.frontendStatus.textContent = selectedFrontend
+    ? `Selected: ${selectedFrontend}`
+    : !matches.length
+    ? frontendNames.length ? "No matching frontends." : "No frontends found."
+    : matches.length > filteredFrontends.length
+    ? `Showing the first ${filteredFrontends.length} of ${matches.length}. Refine your search.`
+    : `${matches.length} frontend${matches.length === 1 ? "" : "s"}`;
+  els.workflowInput.setAttribute("aria-expanded", String(!selectedFrontend && filteredFrontends.length > 0));
+  if (activeFrontendIndex >= 0 && !selectedFrontend) {
+    els.workflowInput.setAttribute("aria-activedescendant", `frontend-option-${activeFrontendIndex}`);
+  } else {
+    els.workflowInput.removeAttribute("aria-activedescendant");
+  }
+}
+
+function selectFrontend(name) {
+  selectedFrontend = name;
+  els.workflowInput.value = name;
+  els.workflowRunBtn.disabled = false;
+  activeFrontendIndex = filteredFrontends.indexOf(name);
+  renderFrontendOptions();
   els.workflowInput.focus();
 }
 
 function closeWorkflow() {
   els.workflowOverlay.classList.add("hidden");
   activeWorkflow = null;
+  selectedFrontend = null;
 }
 
 function newChat() {
@@ -284,10 +419,36 @@ $("cancelWorkflowBtn").addEventListener("click", closeWorkflow);
 els.workflowForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const action = activeWorkflow;
-  const value = els.workflowInput.value.trim();
+  const value = action?.id === "website-health"
+    ? selectedFrontend && selectedFrontend === els.workflowInput.value ? selectedFrontend : ""
+    : action?.options ? els.workflowSelect.value : els.workflowInput.value.trim();
   if (!action || !value) return;
   closeWorkflow();
   sendPrompt(action.label, { id: action.id, value }, `${action.label}: ${value}`);
+});
+els.workflowInput.addEventListener("input", () => {
+  if (activeWorkflow?.id !== "website-health") return;
+  if (els.workflowInput.value !== selectedFrontend) {
+    selectedFrontend = null;
+    els.workflowRunBtn.disabled = true;
+  }
+  activeFrontendIndex = -1;
+  renderFrontendOptions();
+});
+els.workflowInput.addEventListener("keydown", (event) => {
+  if (activeWorkflow?.id !== "website-health" || !filteredFrontends.length) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    activeFrontendIndex = (activeFrontendIndex + step + filteredFrontends.length) % filteredFrontends.length;
+    renderFrontendOptions();
+  } else if (event.key === "Enter" && !selectedFrontend) {
+    event.preventDefault();
+    selectFrontend(filteredFrontends[activeFrontendIndex >= 0 ? activeFrontendIndex : 0]);
+  }
+});
+els.workflowSelect.addEventListener("change", () => {
+  els.workflowRunBtn.disabled = !els.workflowSelect.value;
 });
 els.cancelBtn.addEventListener("click", closeSettings);
 els.saveBtn.addEventListener("click", saveSettings);

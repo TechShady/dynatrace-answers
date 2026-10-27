@@ -278,7 +278,8 @@ body {
 }
 
 textarea,
-input {
+input,
+select {
   font: inherit;
   color: var(--text);
   background: var(--bg);
@@ -289,7 +290,8 @@ input {
 }
 
 textarea:focus,
-input:focus {
+input:focus,
+select:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -378,6 +380,38 @@ input:focus {
 .field > span {
   font-weight: 600;
   font-size: 13px;
+}
+
+.frontend-picker {
+  margin-top: -6px;
+}
+
+.frontend-options {
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.frontend-option {
+  padding: 7px 9px;
+  border-radius: 5px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.frontend-option:hover,
+.frontend-option.active {
+  background: var(--panel-2);
+}
+
+.frontend-status {
+  margin: 5px 2px 0;
+  font-size: 12px;
 }
 
 .scopes {

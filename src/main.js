@@ -11,41 +11,50 @@ const QUERY_MAX_RECORDS = 200;
 const QUERY_POLL_LIMIT = 20;
 const DEFAULT_TIMEFRAME_MS = 24 * 60 * 60 * 1000;
 const SUPPLEMENTARY_MAX_CHARS = 15000;
+const FRONTEND_HEALTH_METRICS_DQL =
+  "timeseries errors = sum(dt.frontend.error.count, scalar: true), " +
+  "requests = sum(dt.frontend.request.count, scalar: true), " +
+  "lcp_p75 = percentile(dt.frontend.web.page.largest_contentful_paint, 75, scalar: true), " +
+  "inp_p75 = percentile(dt.frontend.web.page.interaction_to_next_paint, 75, scalar: true), " +
+  "by:{frontend.name}, from:now()-2h";
+const FRONTEND_HEALTH_PREVIOUS_METRICS_DQL = `${FRONTEND_HEALTH_METRICS_DQL}, shift:-2h`;
 
 const DATA_MODE_INSTRUCTION =
   "You are assisting an on-call engineer who cannot access the Dynatrace UI. Use the supplementary context and its query results " +
   "to give a concise, evidence-based answer with concrete frontend names, counts, time ranges, and user impact. Never include DQL, " +
   "query text, URLs, links, or instructions to open or operate the Dynatrace UI. Do not suggest UI steps. Distinguish confirmed " +
-  "findings from missing or inconclusive telemetry. If the query failed or returned no usable data, say that frontend health " +
+  "findings from missing or inconclusive telemetry. When frontend metric summaries are provided, cover both error trends and page " +
+  "performance (P75 LCP and INP); do not treat error counts alone as overall health or label aggregate errors as JavaScript exceptions. " +
+  "If the query failed or returned no usable data, say that frontend health " +
   "could not be assessed from the available telemetry; do not claim the system is healthy or absent.";
 
 const FRONTEND_WORKFLOWS = {
   "website-health": {
     requiresInput: true,
-    question: (value) => `Assess the health and user impact of the frontend application ${JSON.stringify(value)} over the last 2 hours. Identify error signals, slow interactions, affected user volume, and whether this appears isolated to this frontend. State what the telemetry can and cannot confirm.`,
-    hints: "Query user.events for web frontend data using frontend.type == \"web\" and the named frontend's scalar frontend.name field over a 2-hour timeframe. Match the name case-insensitively. Summarize event volume and available error and duration signals; use only fields supported by the data model. Do not substitute infrastructure or backend-only health for frontend evidence.",
+    question: (value) => `Assess the health and user impact of the frontend application ${JSON.stringify(value)} using its error-rate trend and page performance (LCP and INP) over the latest two hours versus the prior two hours. Identify whether errors or page performance are degraded, and distinguish frontend-wide evidence from user-specific impact.`,
+    hints: "The supplied context contains frontend error/request totals and LCP/INP metrics for two adjacent two-hour periods. Compare both error rates and page performance, and report the actual frontend name. These aggregate errors do not classify JavaScript exceptions; do not claim a specific error type without detailed event data.",
   },
   "system-health": {
-    question: () => "Assess whether there is a system-wide frontend issue across all monitored web frontends over the last 2 hours. Compare frontend applications, identify which are affected, and distinguish broad impact from a single-frontend issue.",
-    hints: "Query user.events for all web frontends using frontend.type == \"web\", grouped by frontend.name over the last 2 hours. Summarize event volume and available frontend error and duration signals per frontend. Use only fields supported by the data model.",
+    question: () => "Assess whether errors or page performance issues are widespread across frontends. Compare current versus prior two-hour error rates, LCP, and INP, and identify whether impact is concentrated in one frontend or spans several.",
+    hints: "The context includes error/request trends and page performance metrics for each frontend. Cover both errors and LCP/INP; distinguish aggregate frontend errors from JavaScript exceptions.",
   },
   "session-health": {
     requiresInput: true,
-    question: (value) => `Assess the recent RUM session health for the user tag ${JSON.stringify(value)}. Identify matching session count, frontend application, error count, session timing, and any evidence of a wider frontend issue.`,
-    hints: "Query user.sessions, NOT user.events. Match exactly against dt.rum.user_tag, the session-level user identifier. Query from:now()-32h to:now() to account for recently ended sessions that may take 30+ minutes to be aggregated. Use frontend.name (array; filter with matchesValue), dt.rum.session.id, error.count, start_time, and end_time. If dt.rum.user_tag is missing or unpopulated, state that the tag cannot be matched and do not substitute a session ID or frontend name.",
+    question: (value) => `Assess the recent health for user tag ${JSON.stringify(value)}. Report matching session errors where available, plus error trends and LCP/INP for the frontend applications used by those sessions. Distinguish session-specific findings from frontend-wide impact.`,
+    hints: "The context includes user.sessions matched by dt.rum.user_tag and frontend metric comparisons. Cover both session errors and frontend error/performance metrics. user.sessions records may lag by 30+ minutes; do not interpret missing recent sessions as proof of no user impact.",
   },
   "impact-scope": {
     requiresInput: true,
-    question: (value) => `An end user reported this frontend symptom: ${JSON.stringify(value)}. Determine whether the available telemetry indicates impact to one user/session, many users, one frontend application, or multiple frontends over the last 2 hours.`,
-    hints: "Query recent user.events where frontend.type == \"web\", grouped by frontend.name, and use available event/error/duration dimensions relevant to the reported symptom. Compare affected frontend counts and user/session counts only when those fields are present. Do not infer user impact from event counts alone.",
+    question: (value) => `An end user reported this frontend symptom: ${JSON.stringify(value)}. Use error trends and page performance (LCP/INP) to determine whether the telemetry points to one frontend or a broader issue. State whether it can establish impact to one user/session versus many.`,
+    hints: "The context contains frontend error/request trends and LCP/INP by application. Compare both error and performance signals across applications. Do not infer user/session counts from aggregate metrics.",
   },
   "frontend-errors": {
-    question: () => "Find the most significant frontend errors across all monitored web applications over the last 2 hours. Rank affected frontends by observed impact and estimate affected users or sessions only when the telemetry supports it.",
-    hints: "Query user.events for web frontends using frontend.type == \"web\" over the last 2 hours. Identify error events using characteristics.has_error == true, then aggregate by frontend.name and available error dimensions. Do not invent an error field or treat every user event as an error.",
+    question: () => "Find frontends with the largest error-rate increases, and include their page-performance readings (LCP and INP) to show whether user experience is also degraded. Compare the latest two hours with the prior two hours.",
+    hints: "The context contains aggregate error/request metrics and LCP/INP by frontend. Rank error increases, and report page performance for the same frontends. Do not label aggregate metric errors as JavaScript exceptions.",
   },
   "slow-pages": {
-    question: () => "Identify the slowest frontend experiences across monitored web applications over the last 2 hours and determine whether slowness is isolated or widespread. Report measured latency and affected frontends/users only when available.",
-    hints: "Query user.events for web frontends using frontend.type == \"web\" over the last 2 hours. Use user-interaction events (characteristics.has_user_interaction) and their duration/performance fields, grouped by frontend.name and page/action dimensions when present. Do not infer page-load performance from unrelated event duration or from backend latency alone.",
+    question: () => "Identify frontends with the slowest LCP or INP and include their error-rate trends to determine whether performance degradation coincides with increased errors. Compare the latest two hours with the prior two hours.",
+    hints: "The context contains LCP/INP and aggregate error/request metrics by frontend. Rank page performance issues and report error trends for those same frontends. LCP/INP values are milliseconds.",
   },
 };
 
@@ -281,6 +290,95 @@ function buildSupplementary(question, dql, records, error) {
   return `${header}\nResults (${note}):\n${json}${coverage}`;
 }
 
+function numericMetric(record, field) {
+  const rawValue = record?.[field];
+  if (rawValue === null || rawValue === undefined || rawValue === "") return null;
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? value : null;
+}
+
+function lcpStatus(value) {
+  if (value === null) return null;
+  return value > 4000 ? "poor" : value > 2500 ? "needs improvement" : "good";
+}
+
+function inpStatus(value) {
+  if (value === null) return null;
+  return value > 500 ? "poor" : value > 200 ? "needs improvement" : "good";
+}
+
+function summarizeFrontendMetricTrend(current, previous) {
+  const previousErrors = numericMetric(previous, "errors");
+  const currentErrors = numericMetric(current, "errors");
+  const previousRequests = numericMetric(previous, "requests");
+  const currentRequests = numericMetric(current, "requests");
+  const previousLcp = numericMetric(previous, "lcp_p75");
+  const currentLcp = numericMetric(current, "lcp_p75");
+  const previousInp = numericMetric(previous, "inp_p75");
+  const currentInp = numericMetric(current, "inp_p75");
+  const previousRate = previousErrors !== null && previousRequests > 0 ? (previousErrors / previousRequests) * 100 : null;
+  const currentRate = currentErrors !== null && currentRequests > 0 ? (currentErrors / currentRequests) * 100 : null;
+
+  return {
+    frontend_name: current["frontend.name"],
+    comparison: "latest 2 hours versus previous 2 hours",
+    previous_error_count: previousErrors,
+    current_error_count: currentErrors,
+    error_count_change: previousErrors !== null && currentErrors !== null ? currentErrors - previousErrors : null,
+    error_count_change_percent: previousErrors > 0 && currentErrors !== null
+      ? Math.round(((currentErrors - previousErrors) / previousErrors) * 1000) / 10
+      : null,
+    errors_started_from_zero: previousErrors === 0 && currentErrors > 0,
+    previous_request_count: previousRequests,
+    current_request_count: currentRequests,
+    previous_error_rate_percent: previousRate === null ? null : Math.round(previousRate * 100) / 100,
+    current_error_rate_percent: currentRate === null ? null : Math.round(currentRate * 100) / 100,
+    error_rate_change_percentage_points: previousRate !== null && currentRate !== null
+      ? Math.round((currentRate - previousRate) * 100) / 100
+      : null,
+    previous_lcp_p75_ms: previousLcp === null ? null : Math.round(previousLcp),
+    current_lcp_p75_ms: currentLcp === null ? null : Math.round(currentLcp),
+    current_lcp_p75_status: lcpStatus(currentLcp),
+    previous_inp_p75_ms: previousInp === null ? null : Math.round(previousInp),
+    current_inp_p75_ms: currentInp === null ? null : Math.round(currentInp),
+    current_inp_p75_status: inpStatus(currentInp),
+  };
+}
+
+function compactFrontendMetricSummary(summary) {
+  return {
+    frontend_name: summary.frontend_name,
+    previous_error_count: summary.previous_error_count,
+    current_error_count: summary.current_error_count,
+    error_count_change_percent: summary.error_count_change_percent,
+    previous_error_rate_percent: summary.previous_error_rate_percent,
+    current_error_rate_percent: summary.current_error_rate_percent,
+    error_rate_change_percentage_points: summary.error_rate_change_percentage_points,
+    current_lcp_p75_ms: summary.current_lcp_p75_ms,
+    current_lcp_p75_status: summary.current_lcp_p75_status,
+    current_inp_p75_ms: summary.current_inp_p75_ms,
+    current_inp_p75_status: summary.current_inp_p75_status,
+  };
+}
+
+function prioritizeFrontendMetrics(summaries) {
+  const top = (selector) => [...summaries]
+    .filter((summary) => selector(summary) !== null && Number.isFinite(selector(summary)))
+    .sort((a, b) => selector(b) - selector(a))
+    .slice(0, 6)
+    .map(compactFrontendMetricSummary);
+  return {
+    frontend_count: summaries.length,
+    comparison: "latest two hours versus previous two hours",
+    error_metric: "Aggregate frontend errors; not JavaScript-exception-specific.",
+    performance_metrics: "P75 LCP and INP in milliseconds; thresholds follow standard web-vitals guidance.",
+    highest_error_rates: top((summary) => summary.current_error_rate_percent),
+    largest_error_rate_increases: top((summary) => summary.error_rate_change_percentage_points),
+    slowest_lcp_p75: top((summary) => summary.current_lcp_p75_ms),
+    slowest_inp_p75: top((summary) => summary.current_inp_p75_ms),
+  };
+}
+
 function sessionCountQuery(question) {
   if (!/\bsessions?\b/i.test(question) || !/\berrors?\b/i.test(question)) return null;
   const application = question.match(/\b[A-Za-z0-9-]+_[A-Za-z0-9_-]+\b/);
@@ -305,6 +403,7 @@ function resolveFrontendWorkflow(input) {
   return {
     question: definition.question(value),
     hints: definition.hints,
+    value,
   };
 }
 
@@ -327,6 +426,75 @@ async function queryEnvironment(creds, question, emit, workflow) {
     ? "Generate a simple coverage query against user.events for all web frontends, grouped by frontend.name with count() and no performance/error filters. Do not add a frontend-name or symptom filter. "
     : "Generate a simple coverage query against user.events, grouped by frontend.name, with count() and no performance-characteristic filters. ";
   try {
+    if (workflow) {
+      emit({ type: "progress", message: "Querying frontend errors and page performance..." });
+      dql = `${FRONTEND_HEALTH_METRICS_DQL}\n\n${FRONTEND_HEALTH_PREVIOUS_METRICS_DQL}`;
+      const metricRecords = await runDql(creds, FRONTEND_HEALTH_METRICS_DQL);
+      const previousMetricRecords = await runDql(creds, FRONTEND_HEALTH_PREVIOUS_METRICS_DQL);
+      const previousMetricsByFrontend = new Map(previousMetricRecords
+        .filter((record) => record["frontend.name"])
+        .map((record) => [String(record["frontend.name"]).toLowerCase(), record]));
+      const summaries = metricRecords
+        .filter((record) => record["frontend.name"])
+        .map((record) => summarizeFrontendMetricTrend(
+          record,
+          previousMetricsByFrontend.get(String(record["frontend.name"]).toLowerCase())
+        ));
+      let records;
+
+      if (workflow.id === "website-health") {
+        const requestedName = workflow.value.toLowerCase();
+        const match = summaries.find((summary) => summary.frontend_name.toLowerCase() === requestedName);
+        records = match
+          ? [match]
+          : metricRecords.length
+          ? [{
+              requested_frontend: workflow.value,
+              metric_series_found: false,
+              available_frontends: summaries.map((summary) => summary.frontend_name).slice(0, 50),
+            }]
+          : [];
+      } else if (workflow.id === "session-health") {
+        emit({ type: "progress", message: "Checking the tagged user session..." });
+        const sessionDql = `fetch user.sessions, from:now()-32h, to:now()\n` +
+          `| filter dt.rum.user_tag == ${JSON.stringify(workflow.value)}\n` +
+          "| summarize matching_sessions=countDistinctExact(dt.rum.session.id), session_errors=sum(error.count), " +
+          "frontend_names=collectDistinct(frontend.name)";
+        dql += `\n\n${sessionDql}`;
+        let sessionRecords = [];
+        let sessionQueryError = null;
+        try {
+          sessionRecords = await runDql(creds, sessionDql);
+        } catch (err) {
+          sessionQueryError = err.message;
+        }
+        const sessionFrontendNames = sessionRecords.flatMap((record) => {
+          const names = record.frontend_names;
+          return Array.isArray(names) ? names.flat(Infinity).filter(Boolean) : names ? [names] : [];
+        }).map((name) => String(name).toLowerCase());
+        records = [{
+          user_tag: workflow.value,
+          session_records: sessionRecords,
+          session_query_error: sessionQueryError,
+          session_frontend_metrics: summaries
+            .filter((summary) => sessionFrontendNames.includes(summary.frontend_name.toLowerCase()))
+            .map(compactFrontendMetricSummary),
+          overall_frontend_health: prioritizeFrontendMetrics(summaries),
+        }];
+      } else {
+        records = [{
+          workflow: workflow.id,
+          ...(workflow.id === "impact-scope" ? { reported_symptom: workflow.value } : {}),
+          ...prioritizeFrontendMetrics(summaries),
+        }];
+      }
+
+      return {
+        dql,
+        recordCount: metricRecords.length,
+        supplementary: buildSupplementary(question, dql, records),
+      };
+    }
     emit({ type: "progress", message: "Generating DQL query..." });
     dql = sessionCountQuery(question) || await generateDql(creds, question + queryHints);
     emit({ type: "progress", message: "Querying your environment..." });

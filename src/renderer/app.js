@@ -209,13 +209,11 @@ async function testConnection() {
   els.testResult.textContent = "Testing...";
   try {
     const r = await api.testConnection({ tenantUrl: els.tenantUrl.value, token: els.token.value });
-    if (r.chatAvailable && r.nl2dqlAvailable) {
+    if (r.chatAvailable) {
       els.testResult.className = "ok-text";
-      els.testResult.textContent = "Connected. Frontend checks can query data and return an analysis.";
-    } else if (r.chatAvailable) {
-      els.testResult.className = "error-text";
-      els.testResult.textContent =
-        "Chat works, but frontend checks require DQL generation. Add davis-copilot:nl2dql:execute.";
+      els.testResult.textContent = r.nl2dqlAvailable
+        ? "Connected. Frontend checks can query errors and page performance."
+        : "Connected. Frontend health checks can query metrics; free-text data questions need DQL generation.";
     } else {
       els.testResult.className = "error-text";
       els.testResult.textContent = `Connected, but chat is not available for this token. Skills: ${r.skills.join(", ") || "none"}. Check the davis-copilot:conversations:execute scope.`;

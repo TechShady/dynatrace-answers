@@ -33,7 +33,7 @@
       </section>
 
       <section class="composer-area">
-        <div id="promptBar" class="prompt-bar" aria-label="Frontend health checks"></div>
+        <div id="promptBar" class="prompt-bar" aria-label="Health checks"></div>
         <form id="composer" class="composer">
           <textarea
             id="input"
@@ -60,6 +60,12 @@
             <div id="frontendPicker" class="frontend-picker hidden">
               <ul id="frontendOptions" class="frontend-options" role="listbox" aria-label="Frontends"></ul>
               <p id="frontendStatus" class="frontend-status muted" aria-live="polite"></p>
+            </div>
+            <div id="hostPicker" class="hidden">
+              <label class="toggle"><input id="allHosts" type="checkbox" checked /><span>All hosts</span></label>
+              <p id="hostSelection" class="frontend-status"></p>
+              <ul id="hostOptions" class="frontend-options" aria-label="Hosts"></ul>
+              <p id="hostStatus" class="frontend-status muted" aria-live="polite"></p>
             </div>
             <div id="sessionConsentRow" class="toggle session-consent hidden">
               <input id="sessionConsent" type="checkbox" />
@@ -140,13 +146,18 @@
           </section>
 
           <section class="settings-section">
+            <h3>Health check buttons</h3>
+            <div id="buttonSettings"></div>
+          </section>
+
+          <section class="settings-section">
             <h3>Data mode</h3>
             <label class="toggle">
               <input id="dataMode" type="checkbox" />
               <span>Answer using my environment's data</span>
             </label>
             <p class="muted small">
-              Free-text questions use environment data when this is enabled. Frontend health check buttons always run a query,
+              Free-text questions use environment data when this is enabled. Health check buttons always run a query,
               even when this option is off. Query results are sent to Dynatrace Intelligence and may contain sensitive values.
             </p>
           </section>

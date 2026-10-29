@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("answers", {
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   testConnection: (settings) => ipcRenderer.invoke("connection:test", settings),
   getFrontends: () => ipcRenderer.invoke("frontends:list"),
+  getHosts: () => ipcRenderer.invoke("hosts:list"),
   send: (request) => ipcRenderer.invoke("chat:send", request),
   exportPdf: (request) => ipcRenderer.invoke("chat:export-pdf", request),
   onChatEvent: (callback) => {

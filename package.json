@@ -1,7 +1,7 @@
 {
   "name": "dynatrace-answers",
   "productName": "Dynatrace Answers",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Operational insights for every team, powered by Dynatrace Intelligence",
   "main": "src/main.js",
   "author": "Dynatrace Answers",
@@ -9,7 +9,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node test/formatting.cjs",
+    "test": "node test/infra.cjs && node test/formatting.cjs",
     "dist": "electron-builder --win nsis --publish never"
   },
   "build": {

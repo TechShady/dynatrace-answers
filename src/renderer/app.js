@@ -51,8 +51,12 @@ let frontendNames = [];
 let filteredFrontends = [];
 let selectedFrontend = null;
 let activeFrontendIndex = -1;
+let hostNames = [];
+let selectedHosts = new Map();
+let hostLoadId = 0;
 
 const FRONTEND_ACTIONS = [
+  { id: "infra-health", label: "Infra Health", inputLabel: "Hosts", placeholder: "Search hosts..." },
   { id: "website-health", label: "Website health", inputLabel: "Frontend application", placeholder: "Application name" },
   { id: "system-health", label: "System health" },
   { id: "guided-triage", label: "Guided triage", inputLabel: "Reported symptom", placeholder: "What did the caller report?" },
@@ -286,10 +290,108 @@ function renderSessionReport(container, report) {
   container.appendChild(section);
 }
 
+function hostAnalysisLink(host) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "host-link";
+  button.textContent = host.name;
+  button.title = `Analyze CPU and memory for ${host.name} (${host.id})`;
+  button.addEventListener("click", () => sendPrompt("Infra Health", { id: "infra-health", value: [host] }, `Infra Health: ${host.name}`));
+  return button;
+}
+
+function formatPercent(value) {
+  return value === null || value === undefined ? "Not available" : `${Number(value).toFixed(1)}%`;
+}
+
+function appendInfraTable(section, title, headers, rows) {
+  const heading = document.createElement("h4");
+  heading.textContent = title;
+  const wrap = document.createElement("div");
+  wrap.className = "session-table-wrap";
+  const table = document.createElement("table");
+  table.className = "session-table infra-table";
+  const head = document.createElement("thead");
+  const header = document.createElement("tr");
+  headers.forEach((text) => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = text;
+    header.appendChild(cell);
+  });
+  head.appendChild(header);
+  const body = document.createElement("tbody");
+  rows.forEach((values) => {
+    const row = document.createElement("tr");
+    values.forEach((value) => {
+      const cell = document.createElement("td");
+      if (value instanceof Node) cell.appendChild(value);
+      else cell.textContent = value;
+      row.appendChild(cell);
+    });
+    body.appendChild(row);
+  });
+  table.append(head, body);
+  wrap.appendChild(table);
+  section.append(heading, wrap);
+}
+
+function renderInfraReport(container, report) {
+  const section = document.createElement("section");
+  section.className = "session-report";
+  const heading = document.createElement("h3");
+  heading.textContent = report.detail ? "Host CPU & Memory Analysis" : "Infrastructure CPU & Memory Summary";
+  const overview = document.createElement("p");
+  const scope = Array.isArray(report.scope) ? `${report.scope.length} selected host(s)` : "All hosts";
+  overview.textContent = `${scope} | ${report.window} | ${formatSessionTime(report.generatedAt)}. ` +
+    (report.hostCount ? `${report.hostCount} hosts with telemetry; ${report.issueHostCount} with average or peak utilization >=80%.` : "No usable host telemetry returned; CPU and memory health is inconclusive.");
+  const thresholds = document.createElement("p");
+  thresholds.className = "muted small";
+  thresholds.textContent = `${report.thresholds} Ranked by average utilization. CPU coverage: ${report.cpuCount} hosts; memory coverage: ${report.memoryCount} hosts.`;
+  section.append(heading, overview, thresholds);
+  const warnings = [...report.errors];
+  if (report.incompleteHostCount) warnings.push(`${report.incompleteHostCount} hosts lack usable CPU or memory readings. Their health is inconclusive.`);
+  if (report.capped) warnings.push("Result cap reached. Rankings are per resource; fleet counts are lower bounds and coverage may be incomplete.");
+  if (report.missingHosts.length) warnings.push(`No telemetry for: ${report.missingHosts.map((host) => host.name).join(", ")}.`);
+  warnings.forEach((text) => {
+    const warning = document.createElement("p");
+    warning.className = "error-text";
+    warning.textContent = text;
+    section.appendChild(warning);
+  });
+  for (const [title, rows] of [["Top 10 Hosts - CPU", report.topCpu], ["Top 10 Hosts - Memory", report.topMemory]]) {
+    if (rows.length) appendInfraTable(section, title, ["Host", "Average", "Peak", "Assessment"], rows.map((row) => [hostAnalysisLink(row), formatPercent(row.average), formatPercent(row.peak), row.status]));
+    else {
+      const empty = document.createElement("p");
+      empty.textContent = `${title}: no usable readings.`;
+      section.appendChild(empty);
+    }
+  }
+  if (report.selected.length > 1) {
+    appendInfraTable(section, "Selected Hosts", ["Host", "CPU avg", "CPU peak", "Memory avg", "Memory peak"], report.selected.map((host) => [hostAnalysisLink(host), formatPercent(host.cpu?.average), formatPercent(host.cpu?.peak), formatPercent(host.memory?.average), formatPercent(host.memory?.peak)]));
+  }
+  if (report.detail) {
+    appendInfraTable(section, "Two-Hour Comparison", ["Resource", "Previous avg", "Latest 5m avg", "5m buckets >=80%", "5m buckets >=90%", "Missing buckets"], ["cpu", "memory"].map((metric) => {
+      const detail = report.detail[metric];
+      const current = detail.current;
+      return [metric === "cpu" ? "CPU" : "Memory", formatPercent(detail.previous?.average), formatPercent(current?.latest), current ? `${current.warningBuckets}/${current.observedBuckets}` : "Not available", current ? `${current.criticalBuckets}/${current.observedBuckets}` : "Not available", current ? String(current.missingBuckets) : "Not available"];
+    }));
+    const cpu = report.detail.cpu.current;
+    const memory = report.detail.memory.current;
+    const samples = Math.max(cpu?.samples.length || 0, memory?.samples.length || 0);
+    if (samples) {
+      const start = new Date(cpu?.timeframe?.start || memory?.timeframe?.start).getTime();
+      appendInfraTable(section, "Five-Minute Readings", ["Bucket start", "CPU avg", "Memory avg"], Array.from({ length: samples }, (_, index) => [Number.isFinite(start) ? formatSessionTime(start + index * 300000) : `Bucket ${index + 1}`, formatPercent(cpu?.samples[index]), formatPercent(memory?.samples[index])]));
+    }
+  }
+  container.appendChild(section);
+}
+
 function renderAnswer(div, result) {
   div.innerHTML = "";
-  if (result.sessionReport) {
-    renderSessionReport(div, result.sessionReport);
+  if (result.sessionReport || result.infraReport) {
+    if (result.infraReport) renderInfraReport(div, result.infraReport);
+    else renderSessionReport(div, result.sessionReport);
     const additional = document.createElement("details");
     additional.className = "assistant-commentary";
     const summary = document.createElement("summary");
@@ -367,7 +469,7 @@ api.onChatEvent((evt) => {
 
 function renderPromptBar() {
   els.promptBar.innerHTML = "";
-  FRONTEND_ACTIONS.forEach((action) => {
+  FRONTEND_ACTIONS.filter((action) => settings.buttons?.[action.id] !== false).forEach((action) => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "chip";
@@ -390,6 +492,11 @@ function startWorkflow(action) {
   const hasOptions = Array.isArray(action.options);
   const requiresConsent = Boolean(action.requiresConsent);
   const isSessionHealth = action.id === "session-health";
+  const isHostPicker = action.id === "infra-health";
+  $("hostPicker").classList.toggle("hidden", !isHostPicker);
+  selectedHosts = new Map();
+  hostNames = [];
+  hostLoadId++;
   els.frontendPicker.classList.toggle("hidden", !isFrontendPicker);
   els.sessionConsentRow.classList.toggle("hidden", !requiresConsent);
   els.sessionIdRow.classList.toggle("hidden", !isSessionHealth);
@@ -397,7 +504,7 @@ function startWorkflow(action) {
   els.sessionConsent.checked = false;
   els.workflowSelect.classList.toggle("hidden", !hasOptions);
   els.workflowInput.classList.toggle("hidden", hasOptions);
-  els.workflowInput.required = !hasOptions && !isSessionHealth;
+  els.workflowInput.required = !hasOptions && !isSessionHealth && !isHostPicker;
   els.workflowSelect.required = hasOptions;
   els.sessionIdInput.required = false;
   els.workflowSelect.innerHTML = "";
@@ -439,6 +546,56 @@ function startWorkflow(action) {
   if (hasOptions) els.workflowSelect.focus();
   else els.workflowInput.focus();
   if (isFrontendPicker) loadFrontendOptions(action);
+  if (isHostPicker) loadHostOptions();
+}
+
+async function loadHostOptions() {
+  const requestId = hostLoadId;
+  $("hostStatus").textContent = "Loading hosts...";
+  $("hostOptions").replaceChildren();
+  $("hostSelection").textContent = "All hosts";
+  $("allHosts").checked = true;
+  els.workflowInput.disabled = false;
+  try {
+    const hosts = await api.getHosts();
+    if (requestId !== hostLoadId || activeWorkflow?.id !== "infra-health") return;
+    hostNames = hosts;
+    renderHostOptions();
+  } catch (error) {
+    if (requestId !== hostLoadId || activeWorkflow?.id !== "infra-health") return;
+    $("hostStatus").textContent = `Could not load host list: ${cleanError(error)}. All-host analysis is still available.`;
+  }
+}
+
+function renderHostOptions() {
+  const search = els.workflowInput.value.trim().toLocaleLowerCase();
+  const matches = hostNames.filter((host) => `${host.name} ${host.id}`.toLocaleLowerCase().includes(search));
+  $("hostOptions").replaceChildren();
+  matches.slice(0, 150).forEach((host) => {
+    const item = document.createElement("li");
+    const label = document.createElement("label");
+    label.className = "toggle host-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.hostId = host.id;
+    checkbox.checked = selectedHosts.has(host.id);
+    checkbox.disabled = !checkbox.checked && selectedHosts.size >= 100;
+    const name = document.createElement("span");
+    name.textContent = host.name;
+    name.title = host.id;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedHosts.set(host.id, host);
+      else selectedHosts.delete(host.id);
+      renderHostOptions();
+      [...$("hostOptions").querySelectorAll("input")].find((input) => input.dataset.hostId === host.id)?.focus();
+    });
+    label.append(checkbox, name);
+    item.appendChild(label);
+    $("hostOptions").appendChild(item);
+  });
+  $("allHosts").checked = selectedHosts.size === 0;
+  $("hostSelection").textContent = selectedHosts.size ? `${selectedHosts.size} selected: ${[...selectedHosts.values()].map((host) => host.name).join(", ")}` : "All hosts";
+  $("hostStatus").textContent = `${matches.length} matching hosts${matches.length > 150 ? "; showing first 150 - refine search" : ""}.${hostNames.length >= 10000 ? " Host list capped at 10,000; All hosts queries the fleet independently." : ""}${selectedHosts.size >= 100 ? " Selection limit: 100 hosts." : ""}`;
 }
 
 async function loadFrontendOptions(action) {
@@ -555,6 +712,20 @@ function openSettings() {
   els.testResult.className = "muted";
   els.saveError.textContent = "";
   els.dataMode.checked = settings.dataMode !== false;
+  const buttonSettings = $("buttonSettings");
+  buttonSettings.replaceChildren();
+  FRONTEND_ACTIONS.forEach((action) => {
+    const label = document.createElement("label");
+    label.className = "toggle";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.action = action.id;
+    checkbox.checked = settings.buttons?.[action.id] !== false;
+    const text = document.createElement("span");
+    text.textContent = action.label;
+    label.append(checkbox, text);
+    buttonSettings.appendChild(label);
+  });
   els.overlay.classList.remove("hidden");
   els.tenantUrl.focus();
 }
@@ -600,6 +771,7 @@ async function saveSettings() {
         tenantUrl: els.tenantUrl.value,
         token: els.token.value,
         dataMode: els.dataMode.checked,
+        buttons: Object.fromEntries([...$("buttonSettings").querySelectorAll("input")].map((input) => [input.dataset.action, input.checked])),
       })),
     };
     if (tenantChanged) newChat();
@@ -645,6 +817,12 @@ $("cancelWorkflowBtn").addEventListener("click", closeWorkflow);
 els.workflowForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const action = activeWorkflow;
+  if (action?.id === "infra-health") {
+    const hosts = [...selectedHosts.values()];
+    closeWorkflow();
+    sendPrompt(action.label, { id: action.id, value: hosts }, `${action.label}: ${hosts.length ? hosts.map((host) => host.name).join(", ") : "All hosts"}`);
+    return;
+  }
   let value;
   if (action?.id === "website-health") {
     value = selectedFrontend && selectedFrontend === els.workflowInput.value ? selectedFrontend : "";
@@ -668,6 +846,10 @@ els.workflowForm.addEventListener("submit", (e) => {
     : `${action.label}: ${value}`);
 });
 els.workflowInput.addEventListener("input", () => {
+  if (activeWorkflow?.id === "infra-health") {
+    renderHostOptions();
+    return;
+  }
   if (activeWorkflow?.id !== "website-health") return;
   if (els.workflowInput.value !== selectedFrontend) {
     selectedFrontend = null;
@@ -707,6 +889,10 @@ els.sessionConsent.addEventListener("change", () => {
   }
 });
 els.cancelBtn.addEventListener("click", closeSettings);
+$("allHosts").addEventListener("change", () => {
+  selectedHosts.clear();
+  renderHostOptions();
+});
 els.saveBtn.addEventListener("click", saveSettings);
 els.testBtn.addEventListener("click", testConnection);
 

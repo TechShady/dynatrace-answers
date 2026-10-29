@@ -48,6 +48,8 @@ body {
 
 .topbar {
   display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   align-items: center;
   justify-content: space-between;
   padding: 10px 18px;
@@ -72,6 +74,7 @@ body {
 
 .topbar-right {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -324,6 +327,7 @@ body {
 
 .composer textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   max-height: 200px;
 }
@@ -532,6 +536,43 @@ select:focus {
 
 .session-id-link:hover {
   color: var(--primary-hover);
+}
+
+.host-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.infra-table {
+  min-width: 460px;
+}
+
+.infra-table td:first-child {
+  min-width: 150px;
+  max-width: 300px;
+  white-space: normal;
+}
+
+.host-option {
+  margin: 0;
+  padding: 7px;
+  cursor: pointer;
+}
+
+.host-option span,
+#hostSelection {
+  overflow-wrap: anywhere;
+}
+
+.host-option:hover {
+  background: var(--panel-2);
 }
 
 .assistant-commentary {

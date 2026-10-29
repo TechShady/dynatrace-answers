@@ -4,6 +4,7 @@ const { app, BrowserWindow, dialog, ipcMain, safeStorage, Menu } = require("elec
 const path = require("node:path");
 const fs = require("node:fs");
 const sanitizeHtml = require("sanitize-html");
+const { HOST_LIST_DQL, resolveHosts, queryInfraHealth } = require("./infra");
 
 const SKILLS_PATH = "/platform/davis/copilot/v1/skills";
 const QUERY_PATH = "/platform/storage/query/v1";
@@ -111,10 +112,15 @@ function loadSettings() {
       tenantUrl: typeof raw.tenantUrl === "string" ? raw.tenantUrl : "",
       tokenEnc: typeof raw.tokenEnc === "string" ? raw.tokenEnc : "",
       dataMode: raw.dataMode !== false,
+      buttons: normalizeButtons(raw.buttons),
     };
   } catch {
-    return { tenantUrl: "", tokenEnc: "", dataMode: true };
+    return { tenantUrl: "", tokenEnc: "", dataMode: true, buttons: normalizeButtons() };
   }
+}
+
+function normalizeButtons(input) {
+  return Object.fromEntries([...Object.keys(FRONTEND_WORKFLOWS), "infra-health"].map((id) => [id, input?.[id] !== false]));
 }
 
 function writeSettings(settings) {
@@ -127,6 +133,7 @@ function publicSettings(settings) {
     tenantUrl: settings.tenantUrl,
     hasToken: Boolean(settings.tokenEnc),
     dataMode: settings.dataMode,
+    buttons: normalizeButtons(settings.buttons),
     version: app.getVersion(),
   };
 }
@@ -593,6 +600,16 @@ function sessionCountQuery(question) {
 
 function resolveFrontendWorkflow(input) {
   if (!input) return null;
+  if (input.id === "infra-health") {
+    const value = resolveHosts(input.value ?? []);
+    return {
+      id: input.id,
+      value,
+      question: value.length === 1
+        ? `Deep-dive CPU and memory health for host ${JSON.stringify(value[0].name)}. Compare the latest two hours with the previous two hours, examine five-minute readings and threshold breaches, and distinguish evidence from possible causes.`
+        : `Summarize CPU and memory issues for ${value.length ? `the ${value.length} selected hosts` : "all hosts"}. Identify the top 10 hosts by average CPU and top 10 by average memory and compare severity.`,
+    };
+  }
   const definition = FRONTEND_WORKFLOWS[input.id];
   if (!definition) throw new Error("Unknown frontend check.");
   const value = input.id === "session-health"
@@ -837,6 +854,7 @@ async function querySessionHealth(creds, question, workflow, emit) {
 }
 
 async function queryEnvironment(creds, question, emit, workflow) {
+  if (workflow?.id === "infra-health") return queryInfraHealth(creds, workflow, runDql, emit);
   let dql = "";
   const sessionQuestion = /\bsessions?\b/i.test(question);
   const frontendQuestion = /frontend|website|ibanking|rum|apdex|web\s+app/i.test(question);
@@ -1074,6 +1092,7 @@ function registerIpc() {
       tenantUrl: normalizeTenantUrl(input?.tenantUrl),
       tokenEnc: token ? encryptToken(token) : current.tokenEnc,
       dataMode: input?.dataMode !== false,
+      buttons: normalizeButtons(input?.buttons ?? current.buttons),
     };
     writeSettings(next);
     return publicSettings(next);
@@ -1095,6 +1114,11 @@ function registerIpc() {
       .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   });
 
+  ipcMain.handle("hosts:list", async () => {
+    const records = await runDql(resolveCredentials(), HOST_LIST_DQL, 10000);
+    return records.filter((record) => record.id).map((record) => ({ id: record.id, name: record.name || record.id }));
+  });
+
   ipcMain.handle("chat:send", async (event, request) => {
     const workflow = resolveFrontendWorkflow(request?.workflow);
     const text = workflow?.question || String(request?.text || "").trim();
@@ -1112,13 +1136,17 @@ function registerIpc() {
       data = await queryEnvironment(creds, body.text, emit, workflow);
       body.context = [
         { type: "supplementary", value: data.supplementary },
-        { type: "instruction", value: DATA_MODE_INSTRUCTION },
+        { type: "instruction", value: workflow?.id === "infra-health"
+          ? "You are Dynatrace Answers. Assess only host CPU and memory using the supplied structured evidence. State the time window, percent units, severity, coverage, missing telemetry, and query failures. Distinguish peaks from sustained load and correlation from cause. Do not invent process-level causes or claim overall infrastructure health. Never include DQL, URLs, links, or instructions to use the Dynatrace UI or contact an administrator."
+          : DATA_MODE_INSTRUCTION },
         { type: "document-retrieval", value: "dynatrace" },
       ];
       emit({ type: "progress", message: "Analyzing results..." });
     }
 
-    const answer = await callDynatrace(
+    let answer;
+    try {
+      answer = await callDynatrace(
       creds,
       `${SKILLS_PATH}/conversations:message`,
       {
@@ -1138,11 +1166,16 @@ function registerIpc() {
           notifications: json.metadata?.notifications || [],
         };
       }
-    );
+      );
+    } catch (error) {
+      if (!data?.infraReport) throw error;
+      answer = { text: `Additional AI analysis unavailable: ${error.message}` };
+    }
     return {
       ...answer,
       sources: [],
       ...(data?.sessionReport ? { sessionReport: data.sessionReport } : {}),
+      ...(data?.infraReport ? { infraReport: data.infraReport } : {}),
     };
   });
 

@@ -26,6 +26,8 @@ const els = {
   workflowRunBtn: $("workflowRunBtn"),
   sessionConsentRow: $("sessionConsentRow"),
   sessionConsent: $("sessionConsent"),
+  sessionIdRow: $("sessionIdRow"),
+  sessionIdInput: $("sessionIdInput"),
   overlay: $("settingsOverlay"),
   tenantUrl: $("tenantUrl"),
   token: $("token"),
@@ -53,7 +55,7 @@ const FRONTEND_ACTIONS = [
   { id: "website-health", label: "Website health", inputLabel: "Frontend application", placeholder: "Application name" },
   { id: "system-health", label: "System health" },
   { id: "guided-triage", label: "Guided triage", inputLabel: "Reported symptom", placeholder: "What did the caller report?" },
-  { id: "session-health", label: "Session health", inputLabel: "User tag", placeholder: "User tag or identifier", requiresConsent: true },
+  { id: "session-health", label: "Session health", inputLabel: "User identifier or tag", placeholder: "e.g. maria", requiresConsent: true },
   {
     id: "impact-scope",
     label: "Impact scope",
@@ -209,8 +211,11 @@ function startWorkflow(action) {
   const isFrontendPicker = action.id === "website-health";
   const hasOptions = Array.isArray(action.options);
   const requiresConsent = Boolean(action.requiresConsent);
+  const isSessionHealth = action.id === "session-health";
   els.frontendPicker.classList.toggle("hidden", !isFrontendPicker);
   els.sessionConsentRow.classList.toggle("hidden", !requiresConsent);
+  els.sessionIdRow.classList.toggle("hidden", !isSessionHealth);
+  els.sessionIdInput.value = "";
   els.sessionConsent.checked = false;
   els.workflowSelect.classList.toggle("hidden", !hasOptions);
   els.workflowInput.classList.toggle("hidden", hasOptions);
@@ -460,16 +465,27 @@ $("cancelWorkflowBtn").addEventListener("click", closeWorkflow);
 els.workflowForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const action = activeWorkflow;
-  const value = action?.id === "website-health"
-    ? selectedFrontend && selectedFrontend === els.workflowInput.value ? selectedFrontend : ""
-    : action?.options ? els.workflowSelect.value : els.workflowInput.value.trim();
-  if (!action || !value) return;
+  let value;
+  if (action?.id === "website-health") {
+    value = selectedFrontend && selectedFrontend === els.workflowInput.value ? selectedFrontend : "";
+  } else if (action?.id === "session-health") {
+    value = {
+      userIdentifier: els.workflowInput.value.trim(),
+      sessionId: els.sessionIdInput.value.trim(),
+    };
+    if (!value.userIdentifier && !value.sessionId) return;
+  } else {
+    value = action?.options ? els.workflowSelect.value : els.workflowInput.value.trim();
+  }
+  if (!action || !value || (typeof value === "object" && !value.userIdentifier && !value.sessionId)) return;
   closeWorkflow();
   sendPrompt(action.label, {
     id: action.id,
     value,
     ...(action.requiresConsent ? { consent: els.sessionConsent.checked } : {}),
-  }, `${action.label}: ${value}`);
+  }, action.id === "session-health"
+    ? `${action.label}: ${value.userIdentifier || "no user identifier"}; ${value.sessionId || "no session ID"}`
+    : `${action.label}: ${value}`);
 });
 els.workflowInput.addEventListener("input", () => {
   if (activeWorkflow?.id !== "website-health") return;
@@ -497,12 +513,20 @@ els.workflowSelect.addEventListener("change", () => {
 });
 els.workflowInput.addEventListener("input", () => {
   if (activeWorkflow?.requiresConsent) {
-    els.workflowRunBtn.disabled = !els.workflowInput.value.trim() || !els.sessionConsent.checked;
+    const hasIdentifier = els.workflowInput.value.trim() || els.sessionIdInput.value.trim();
+    els.workflowRunBtn.disabled = !hasIdentifier || !els.sessionConsent.checked;
+  }
+});
+els.sessionIdInput.addEventListener("input", () => {
+  if (activeWorkflow?.requiresConsent) {
+    const hasIdentifier = els.workflowInput.value.trim() || els.sessionIdInput.value.trim();
+    els.workflowRunBtn.disabled = !hasIdentifier || !els.sessionConsent.checked;
   }
 });
 els.sessionConsent.addEventListener("change", () => {
   if (activeWorkflow?.requiresConsent) {
-    els.workflowRunBtn.disabled = !els.workflowInput.value.trim() || !els.sessionConsent.checked;
+    const hasIdentifier = els.workflowInput.value.trim() || els.sessionIdInput.value.trim();
+    els.workflowRunBtn.disabled = !hasIdentifier || !els.sessionConsent.checked;
   }
 });
 els.cancelBtn.addEventListener("click", closeSettings);

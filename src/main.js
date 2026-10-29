@@ -59,7 +59,7 @@ const FRONTEND_WORKFLOWS = {
   "session-health": {
     requiresInput: true,
     requiresConsent: true,
-    question: ({ userIdentifier, sessionId }) => `Assess the specific RUM session using user identifier/tag ${JSON.stringify(userIdentifier || "not provided")} and session ID ${JSON.stringify(sessionId || "not provided")}. Verify whether both identifiers refer to the same session, then summarize its page views, interactions, errors, frontend, and timing.`,
+    question: (value) => `Assess the specific RUM session ID ${JSON.stringify(value.sessionId)}${value.userIdentifier ? ` for user identifier/tag ${JSON.stringify(value.userIdentifier)}` : ""}. Verify the identifiers belong to the same session when a user identifier is supplied. Report page views, interactions, errors, frontend, and timing for this session only.`,
     hints: "Use the session-specific records and event activity as the primary evidence. Compare user.identifier and dt.rum.user_tag as scalar strings, and verify any supplied session ID against the same record. If one or both identifiers do not match, say so plainly. If there are no matching records or events, state that this session cannot be assessed; never substitute fleet-wide metrics or call the user healthy.",
   },
   "impact-scope": {
@@ -605,6 +605,7 @@ function resolveFrontendWorkflow(input) {
     : String(input.value || "").trim().slice(0, 500);
   const hasInput = typeof value === "string" ? Boolean(value) : Boolean(value.userIdentifier || value.sessionId);
   if (definition.requiresInput && !hasInput) throw new Error("Enter a user identifier/tag or session ID.");
+  if (input.id === "session-health" && !value.sessionId) throw new Error("A session ID is required for Session health.");
   if (definition.requiresConsent && input.consent !== true) throw new Error("Confirm permission before sending the user tag for analysis.");
   if (definition.options && !definition.options.includes(value)) throw new Error("Select a symptom from the list.");
   return {

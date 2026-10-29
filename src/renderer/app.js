@@ -55,7 +55,7 @@ const FRONTEND_ACTIONS = [
   { id: "website-health", label: "Website health", inputLabel: "Frontend application", placeholder: "Application name" },
   { id: "system-health", label: "System health" },
   { id: "guided-triage", label: "Guided triage", inputLabel: "Reported symptom", placeholder: "What did the caller report?" },
-  { id: "session-health", label: "Session health", inputLabel: "User identifier or tag", placeholder: "e.g. maria", requiresConsent: true },
+  { id: "session-health", label: "Session health", inputLabel: "User identifier or tag (optional)", placeholder: "e.g. maria", requiresConsent: true },
   {
     id: "impact-scope",
     label: "Impact scope",
@@ -219,8 +219,9 @@ function startWorkflow(action) {
   els.sessionConsent.checked = false;
   els.workflowSelect.classList.toggle("hidden", !hasOptions);
   els.workflowInput.classList.toggle("hidden", hasOptions);
-  els.workflowInput.required = !hasOptions;
+  els.workflowInput.required = !hasOptions && !isSessionHealth;
   els.workflowSelect.required = hasOptions;
+  els.sessionIdInput.required = isSessionHealth;
   els.workflowSelect.innerHTML = "";
   if (hasOptions) {
     const placeholder = document.createElement("option");
@@ -473,7 +474,7 @@ els.workflowForm.addEventListener("submit", (e) => {
       userIdentifier: els.workflowInput.value.trim(),
       sessionId: els.sessionIdInput.value.trim(),
     };
-    if (!value.userIdentifier && !value.sessionId) return;
+    if (!value.sessionId) return;
   } else {
     value = action?.options ? els.workflowSelect.value : els.workflowInput.value.trim();
   }
@@ -484,7 +485,7 @@ els.workflowForm.addEventListener("submit", (e) => {
     value,
     ...(action.requiresConsent ? { consent: els.sessionConsent.checked } : {}),
   }, action.id === "session-health"
-    ? `${action.label}: ${value.userIdentifier || "no user identifier"}; ${value.sessionId || "no session ID"}`
+    ? `${action.label}: ${value.userIdentifier || "no user identifier"}; ${value.sessionId}`
     : `${action.label}: ${value}`);
 });
 els.workflowInput.addEventListener("input", () => {
@@ -513,20 +514,17 @@ els.workflowSelect.addEventListener("change", () => {
 });
 els.workflowInput.addEventListener("input", () => {
   if (activeWorkflow?.requiresConsent) {
-    const hasIdentifier = els.workflowInput.value.trim() || els.sessionIdInput.value.trim();
-    els.workflowRunBtn.disabled = !hasIdentifier || !els.sessionConsent.checked;
+    els.workflowRunBtn.disabled = !els.sessionIdInput.value.trim() || !els.sessionConsent.checked;
   }
 });
 els.sessionIdInput.addEventListener("input", () => {
   if (activeWorkflow?.requiresConsent) {
-    const hasIdentifier = els.workflowInput.value.trim() || els.sessionIdInput.value.trim();
-    els.workflowRunBtn.disabled = !hasIdentifier || !els.sessionConsent.checked;
+    els.workflowRunBtn.disabled = !els.sessionIdInput.value.trim() || !els.sessionConsent.checked;
   }
 });
 els.sessionConsent.addEventListener("change", () => {
   if (activeWorkflow?.requiresConsent) {
-    const hasIdentifier = els.workflowInput.value.trim() || els.sessionIdInput.value.trim();
-    els.workflowRunBtn.disabled = !hasIdentifier || !els.sessionConsent.checked;
+    els.workflowRunBtn.disabled = !els.sessionIdInput.value.trim() || !els.sessionConsent.checked;
   }
 });
 els.cancelBtn.addEventListener("click", closeSettings);

@@ -62,8 +62,12 @@
             </div>
             <div id="sessionConsentRow" class="toggle session-consent hidden">
               <input id="sessionConsent" type="checkbox" />
-              <label for="sessionConsent">I have permission to share this user tag and matching session data with Dynatrace Intelligence.</label>
+              <label for="sessionConsent">I have permission to share these identifiers and matching session data with Dynatrace Intelligence.</label>
             </div>
+             <label id="sessionIdRow" class="field hidden">
+               <span>Session ID</span>
+               <input id="sessionIdInput" type="text" maxlength="200" autocomplete="off" />
+             </label>
           </div>
         </div>
         <div class="dialog-footer">

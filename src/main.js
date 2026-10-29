@@ -59,8 +59,10 @@ const FRONTEND_WORKFLOWS = {
   "session-health": {
     requiresInput: true,
     requiresConsent: true,
-    question: (value) => `Assess the specific RUM session ID ${JSON.stringify(value.sessionId)}${value.userIdentifier ? ` for user identifier/tag ${JSON.stringify(value.userIdentifier)}` : ""}. Verify the identifiers belong to the same session when a user identifier is supplied. Report page views, interactions, errors, frontend, and timing for this session only.`,
-    hints: "Use the session-specific records and event activity as the primary evidence. Compare user.identifier and dt.rum.user_tag as scalar strings, and verify any supplied session ID against the same record. If one or both identifiers do not match, say so plainly. If there are no matching records or events, state that this session cannot be assessed; never substitute fleet-wide metrics or call the user healthy.",
+    question: (value) => value.sessionId
+      ? `Assess session ID ${JSON.stringify(value.sessionId)}${value.userIdentifier ? ` for user identifier/tag ${JSON.stringify(value.userIdentifier)}` : ""}. Report activity for the matching session. If both identifiers were supplied, verify whether they match the same session.`
+      : `Assess every session from the last seven days for user identifier/tag ${JSON.stringify(value.userIdentifier)}. Summarize activity, errors, frontend, and timing for each matching session.`,
+    hints: "Session-specific records are primary evidence. A tag-only request returns every matching session from the last seven days; an ID-only request returns that session. Compare user.identifier and dt.rum.user_tag as scalar strings, and if both inputs are supplied verify they match the same session. If no records or events match, say so plainly; never substitute fleet-wide metrics or call the user healthy.",
   },
   "impact-scope": {
     requiresInput: true,
@@ -550,34 +552,6 @@ function buildSessionActivitySummary(events) {
   };
 }
 
-function buildSessionHealthContext(userTag, sessionRecords, sessionQueryError, summaries, problems, problemQueryError) {
-  const matchingSessions = sessionQueryError
-    ? null
-    : numericMetric(sessionRecords[0], "matching_sessions") ?? 0;
-  const hasMatchedSession = matchingSessions > 0;
-  const sessionFrontendNames = hasMatchedSession
-    ? sessionRecords.flatMap((record) => {
-        const names = record.frontend_names;
-        return Array.isArray(names) ? names.flat(Infinity).filter(Boolean) : names ? [names] : [];
-      }).map((name) => String(name).toLowerCase())
-    : [];
-
-  return {
-    user_tag: userTag,
-    session_status: sessionQueryError ? "query_failed" : hasMatchedSession ? "matched" : "no_matching_session",
-    matching_session_count: matchingSessions,
-    session_query_error: sessionQueryError,
-    session_records: hasMatchedSession ? sessionRecords : [],
-    session_frontend_metrics: summaries
-      .filter((summary) => sessionFrontendNames.includes(summary.frontend_name.toLowerCase()))
-      .map(compactFrontendMetricSummary),
-    session_assessment_note: hasMatchedSession
-      ? "Frontend metrics are included only for applications listed on the matched sessions."
-      : "No session-specific health verdict is possible without a matching session record. Absence of a record does not mean the user was unaffected.",
-    ...(hasMatchedSession ? { davis_problem_context: buildDavisProblemContext(problems, null, problemQueryError) } : {}),
-  };
-}
-
 function sessionCountQuery(question) {
   if (!/\bsessions?\b/i.test(question) || !/\berrors?\b/i.test(question)) return null;
   const application = question.match(/\b[A-Za-z0-9-]+_[A-Za-z0-9_-]+\b/);
@@ -605,7 +579,6 @@ function resolveFrontendWorkflow(input) {
     : String(input.value || "").trim().slice(0, 500);
   const hasInput = typeof value === "string" ? Boolean(value) : Boolean(value.userIdentifier || value.sessionId);
   if (definition.requiresInput && !hasInput) throw new Error("Enter a user identifier/tag or session ID.");
-  if (input.id === "session-health" && !value.sessionId) throw new Error("A session ID is required for Session health.");
   if (definition.requiresConsent && input.consent !== true) throw new Error("Confirm permission before sending the user tag for analysis.");
   if (definition.options && !definition.options.includes(value)) throw new Error("Select a symptom from the list.");
   return {
@@ -613,6 +586,187 @@ function resolveFrontendWorkflow(input) {
     hints: definition.hints,
     value,
   };
+}
+
+async function querySessionHealth(creds, question, workflow, emit) {
+  const { userIdentifier, sessionId } = workflow.value;
+  const sessionLookback = sessionId ? "30d" : "7d";
+  const filters = [];
+  if (userIdentifier) {
+    filters.push(`user.identifier == ${JSON.stringify(userIdentifier)}`);
+    filters.push(`dt.rum.user_tag == ${JSON.stringify(userIdentifier)}`);
+  }
+  if (sessionId) filters.push(`dt.rum.session.id == ${JSON.stringify(sessionId)}`);
+
+  const sessionDql = `fetch user.sessions, from:now()-${sessionLookback}, to:now()\n` +
+    '| filter dt.system.bucket != "default_synthetic_user_sessions"\n' +
+    `| filter ${filters.join(" or ")}\n` +
+    "| sort start_time desc\n" +
+    "| limit 500\n" +
+    "| fields dt.rum.session.id, start_time, end_time, user.identifier, dt.rum.user_tag, frontend.name, " +
+    "duration = toDouble(duration), error.count, navigation_count, user_interaction_count, user_action_count, " +
+    "request_count, page_summary_count, view_summary_count, browser.name, device.type, os.name";
+
+  emit({ type: "progress", message: "Looking up matching session records..." });
+  const sessionRecords = await runDql(creds, sessionDql, 500);
+  const tagMatches = (record) => [record["user.identifier"], record["dt.rum.user_tag"]]
+    .some((value) => String(value || "").toLowerCase() === userIdentifier.toLowerCase());
+  const tagMatchedRecords = userIdentifier ? sessionRecords.filter(tagMatches) : [];
+  const sessionMatchedRecords = sessionId
+    ? sessionRecords.filter((record) => record["dt.rum.session.id"] === sessionId)
+    : [];
+  const sameSessionMatches = userIdentifier && sessionId
+    ? sessionRecords.filter((record) => tagMatches(record) && record["dt.rum.session.id"] === sessionId)
+    : [];
+  const candidateRecords = userIdentifier && sessionId
+    ? [...tagMatchedRecords, ...sessionMatchedRecords]
+    : sessionId ? sessionMatchedRecords : tagMatchedRecords;
+  const uniqueCandidateRecords = [...new Map(candidateRecords
+    .filter((record) => record["dt.rum.session.id"])
+    .map((record) => [record["dt.rum.session.id"], record])).values()];
+  const recordsForDetails = userIdentifier && sessionId && sameSessionMatches.length
+    ? sameSessionMatches
+    : uniqueCandidateRecords;
+
+  const allSessionIds = [...new Set([
+    ...recordsForDetails.map((record) => record["dt.rum.session.id"]),
+    ...(sessionId ? [sessionId] : []),
+  ].filter(Boolean))];
+  const eventSessionIds = allSessionIds.slice(0, 100);
+  const eventFilter = eventSessionIds.length
+    ? eventSessionIds.map((id) => `dt.rum.session.id == ${JSON.stringify(id)}`).join(" or ")
+    : userIdentifier
+    ? `user.identifier == ${JSON.stringify(userIdentifier)} or dt.rum.user_tag == ${JSON.stringify(userIdentifier)}`
+    : "";
+
+  let eventDql = "";
+  let eventRecords = [];
+  let eventQueryError = null;
+  if (eventFilter) {
+    emit({ type: "progress", message: "Retrieving page, interaction, and error activity..." });
+    eventDql = `fetch user.events, from:now()-${sessionLookback}, to:now()\n` +
+      `| filter ${eventFilter}\n` +
+      "| fields timestamp, dt.rum.session.id, frontend.name, user.identifier, dt.rum.user_tag, " +
+      "characteristics.has_page_summary, characteristics.has_user_interaction, characteristics.has_error, " +
+      "page.url.path, interaction.name, error.type, error.display_name, exception.message, exception.type, duration\n" +
+      "| sort timestamp desc\n" +
+      "| limit 1000";
+    try {
+      eventRecords = await runDql(creds, eventDql, 1000);
+      if (eventSessionIds.length) {
+        const allowedSessionIds = new Set(eventSessionIds);
+        eventRecords = eventRecords.filter((event) => allowedSessionIds.has(event["dt.rum.session.id"]));
+      } else if (userIdentifier) {
+        eventRecords = eventRecords.filter((event) =>
+          [event.user_identifier, event["user.identifier"], event["dt.rum.user_tag"]]
+            .some((value) => String(value || "").toLowerCase() === userIdentifier.toLowerCase())
+        );
+      }
+    } catch (err) {
+      eventQueryError = err.message;
+    }
+  }
+
+  const eventsBySession = new Map();
+  for (const event of eventRecords) {
+    const id = event["dt.rum.session.id"];
+    if (!id) continue;
+    if (!eventsBySession.has(id)) eventsBySession.set(id, []);
+    eventsBySession.get(id).push(event);
+  }
+  const eventTagMatches = userIdentifier && eventRecords.some((event) =>
+    [event.user_identifier, event["user.identifier"], event["dt.rum.user_tag"]]
+      .some((value) => String(value || "").toLowerCase() === userIdentifier.toLowerCase())
+  );
+
+  const matchStatus = eventQueryError && !sessionRecords.length
+    ? "query_failed"
+    : userIdentifier && sessionId
+    ? sameSessionMatches.length || eventTagMatches && eventsBySession.has(sessionId)
+      ? "both_identifiers_matched"
+      : uniqueCandidateRecords.length || eventRecords.length ? "identifiers_do_not_match_same_session" : "no_matching_records"
+    : userIdentifier
+    ? tagMatchedRecords.length || eventTagMatches ? "user_identifier_matched_all_sessions" : "no_matching_records"
+    : sessionMatchedRecords.length || eventsBySession.has(sessionId) ? "session_id_matched" : "no_matching_records";
+  const sessionDetails = recordsForDetails.map((record) => {
+    const id = record["dt.rum.session.id"];
+    return {
+      record_type: "session",
+      session_id: id,
+      start_time: record.start_time,
+      end_time: record.end_time,
+      user_identifier: record["user.identifier"] || record["dt.rum.user_tag"],
+      frontend_names: record.frontend_name || record["frontend.name"],
+      duration_ns: numericMetric(record, "duration"),
+      error_count: numericMetric(record, "error.count"),
+      navigation_count: numericMetric(record, "navigation_count"),
+      user_interaction_count: numericMetric(record, "user_interaction_count"),
+      user_action_count: numericMetric(record, "user_action_count"),
+      request_count: numericMetric(record, "request_count"),
+      page_summary_count: numericMetric(record, "page_summary_count"),
+      view_summary_count: numericMetric(record, "view_summary_count"),
+      browser: record["browser.name"],
+      device: record["device.type"],
+      os: record["os.name"],
+      event_activity: buildSessionActivitySummary(eventsBySession.get(id) || []),
+    };
+  });
+  const eventOnlySessions = [...eventsBySession.entries()]
+    .filter(([id]) => !recordsForDetails.some((record) => record["dt.rum.session.id"] === id))
+    .map(([id, events]) => ({
+      record_type: "event-only-session",
+      session_id: id,
+      event_activity: buildSessionActivitySummary(events),
+    }));
+  const matchedCount = userIdentifier && sessionId
+    ? sameSessionMatches.length || (eventTagMatches && eventsBySession.has(sessionId) ? 1 : 0)
+    : userIdentifier ? tagMatchedRecords.length || eventOnlySessions.length : sessionMatchedRecords.length || eventOnlySessions.length;
+  const matchedFrontendNames = [...new Set([
+    ...recordsForDetails.flatMap((record) => {
+      const names = record.frontend_name || record["frontend.name"];
+      return Array.isArray(names) ? names.flat(Infinity).filter(Boolean) : names ? [names] : [];
+    }),
+    ...eventRecords.map((event) => event["frontend.name"]).flat(Infinity).filter(Boolean),
+  ].map((name) => String(name).toLowerCase()))];
+
+  const summary = {
+    record_type: "session-lookup-summary",
+    requested_user_identifier: userIdentifier || null,
+    requested_session_id: sessionId || null,
+    match_status: matchStatus,
+    matching_session_count: matchedCount,
+    user_identifier_match_count: tagMatchedRecords.length || (eventTagMatches ? eventOnlySessions.length : 0),
+    session_id_match_count: sessionMatchedRecords.length || (sessionId && eventsBySession.has(sessionId) ? 1 : 0),
+    same_session_match_count: sameSessionMatches.length || (eventTagMatches && sessionId && eventsBySession.has(sessionId) ? 1 : 0),
+    session_window: sessionLookback,
+    session_results_truncated: sessionRecords.length >= 500,
+    event_sessions_queried: eventSessionIds.length,
+    event_sessions_truncated: allSessionIds.length > eventSessionIds.length,
+    session_query_status: "queried",
+    event_query_status: eventQueryError ? "failed" : eventFilter ? "queried" : "not_run",
+    event_query_error: eventQueryError,
+    session_assessment_note: sessionDetails.length || eventOnlySessions.length
+      ? "Each matched session is listed separately. Tag-only mode includes all matching sessions in the stated window, subject to the query limit."
+      : "No matching session record or event activity was found for the supplied identifiers. This does not establish that the user was unaffected.",
+  };
+
+  const frontendMetrics = matchedFrontendNames.length
+    ? await (async () => {
+        const current = await runDql(creds, FRONTEND_HEALTH_METRICS_DQL);
+        const previous = await runDql(creds, FRONTEND_HEALTH_PREVIOUS_METRICS_DQL);
+        const previousByName = new Map(previous.map((record) => [String(record["frontend.name"] || "").toLowerCase(), record]));
+        return current
+          .filter((record) => matchedFrontendNames.includes(String(record["frontend.name"] || "").toLowerCase()))
+          .map((record) => compactFrontendMetricSummary(summarizeFrontendMetricTrend(
+            record,
+            previousByName.get(String(record["frontend.name"] || "").toLowerCase())
+          )));
+      })()
+    : [];
+  const records = [summary, ...sessionDetails, ...eventOnlySessions];
+  if (frontendMetrics.length) records.push({ record_type: "session_frontend_metrics", frontends: frontendMetrics });
+  const dql = eventDql ? `${sessionDql}\n\n${eventDql}` : sessionDql;
+  return { dql, recordCount: records.length, supplementary: buildSupplementary(question, dql, records) };
 }
 
 async function queryEnvironment(creds, question, emit, workflow) {
@@ -634,6 +788,10 @@ async function queryEnvironment(creds, question, emit, workflow) {
     ? "Generate a simple coverage query against user.events for all web frontends, grouped by frontend.name with count() and no performance/error filters. Do not add a frontend-name or symptom filter. "
     : "Generate a simple coverage query against user.events, grouped by frontend.name, with count() and no performance-characteristic filters. ";
   try {
+    if (workflow?.id === "session-health") {
+      emit({ type: "progress", message: "Checking the supplied user identifier and session ID..." });
+      return await querySessionHealth(creds, question, workflow, emit);
+    }
     if (workflow) {
       emit({ type: "progress", message: "Querying frontend errors and page performance..." });
       dql = `${FRONTEND_HEALTH_METRICS_DQL}\n\n${FRONTEND_HEALTH_PREVIOUS_METRICS_DQL}`;
@@ -688,12 +846,12 @@ async function queryEnvironment(creds, question, emit, workflow) {
           sessionFilters.push(`dt.rum.user_tag == ${JSON.stringify(userIdentifier)}`);
         }
         if (sessionId) sessionFilters.push(`dt.rum.session.id == ${JSON.stringify(sessionId)}`);
-        const sessionLookback = sessionId ? "30d" : "32h";
+        const sessionLookback = sessionId ? "30d" : "7d";
         const sessionDql = `fetch user.sessions, from:now()-${sessionLookback}, to:now()\n` +
           '| filter dt.system.bucket != "default_synthetic_user_sessions"\n' +
           `| filter ${sessionFilters.join(" or ")}\n` +
           "| sort start_time desc\n" +
-          "| limit 100\n" +
+          "| limit 500\n" +
           "| fields dt.rum.session.id, start_time, end_time, user.identifier, dt.rum.user_tag, frontend.name, " +
           "duration = toDouble(duration), error.count, navigation_count, user_interaction_count, user_action_count, " +
           "request_count, page_summary_count, view_summary_count, browser.name, device.type, os.name";
@@ -701,7 +859,7 @@ async function queryEnvironment(creds, question, emit, workflow) {
         let sessionRecords = [];
         let sessionQueryError = null;
         try {
-          sessionRecords = await runDql(creds, sessionDql);
+          sessionRecords = await runDql(creds, sessionDql, 500);
         } catch (err) {
           sessionQueryError = err.message;
         }
@@ -721,21 +879,26 @@ async function queryEnvironment(creds, question, emit, workflow) {
         const eventSessionIds = [...new Set((sessionId
           ? [sessionId]
           : relevantSessionRecords.map((record) => record["dt.rum.session.id"])
-        ).filter(Boolean))].slice(0, 10);
+        ).filter(Boolean))].slice(0, 50);
         let sessionEventRecords = [];
         let sessionEventQueryError = null;
         let sessionEventsDql = "";
-        if (eventSessionIds.length) {
-          sessionEventsDql = `fetch user.events, from:now()-30d, to:now()\n` +
-            `| filter ${eventSessionIds.map((id) => `dt.rum.session.id == ${JSON.stringify(id)}`).join(" or ")}\n` +
+        const eventFilter = eventSessionIds.length
+          ? eventSessionIds.map((id) => `dt.rum.session.id == ${JSON.stringify(id)}`).join(" or ")
+          : userIdentifier
+          ? `user.identifier == ${JSON.stringify(userIdentifier)} or dt.rum.user_tag == ${JSON.stringify(userIdentifier)}`
+          : "";
+        if (eventFilter) {
+          sessionEventsDql = `fetch user.events, from:now()-${sessionLookback}, to:now()\n` +
+            `| filter ${eventFilter}\n` +
             "| fields timestamp, dt.rum.session.id, frontend.name, dt.rum.user_tag, characteristics.has_page_summary, " +
-            "characteristics.has_user_interaction, characteristics.has_error, page.url.path, interaction.name, " +
+            "user.identifier, characteristics.has_user_interaction, characteristics.has_error, page.url.path, interaction.name, " +
             "error.type, error.display_name, exception.message, exception.type, duration\n" +
             "| sort timestamp desc\n" +
-            "| limit 200";
+            "| limit 1000";
           dql += `\n\n${sessionEventsDql}`;
           try {
-            sessionEventRecords = await runDql(creds, sessionEventsDql, 200);
+            sessionEventRecords = await runDql(creds, sessionEventsDql, 1000);
           } catch (err) {
             sessionEventQueryError = err.message;
           }
@@ -767,8 +930,11 @@ async function queryEnvironment(creds, question, emit, workflow) {
           session_query_error: sessionQueryError,
           event_activity: buildSessionActivitySummary(sessionEventRecords),
           event_query_error: sessionEventQueryError,
+          session_results_truncated: sessionRecords.length >= 500,
+          event_sessions_queried: eventSessionIds.length,
+          event_lookup_truncated: new Set([...relevantSessionRecords.map((record) => record["dt.rum.session.id"]), ...(sessionId ? [sessionId] : [])].filter(Boolean)).size > eventSessionIds.length,
           session_assessment_note: relevantSessionRecords.length || sessionEventRecords.length
-            ? "Session-specific records are shown. Event activity may be present even when the finalized session aggregate is not."
+            ? `All matching session records within ${sessionLookback} are shown, up to the query limit. Event activity may be present even when the finalized session aggregate is not.`
             : "No matching session record or event activity was found for the supplied identifiers in the queried windows. This does not establish that the user was unaffected.",
           session_frontend_metrics: summaries
             .filter((summary) => matchedFrontendNames.includes(summary.frontend_name.toLowerCase()))

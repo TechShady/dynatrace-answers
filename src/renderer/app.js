@@ -221,7 +221,7 @@ function startWorkflow(action) {
   els.workflowInput.classList.toggle("hidden", hasOptions);
   els.workflowInput.required = !hasOptions && !isSessionHealth;
   els.workflowSelect.required = hasOptions;
-  els.sessionIdInput.required = isSessionHealth;
+  els.sessionIdInput.required = false;
   els.workflowSelect.innerHTML = "";
   if (hasOptions) {
     const placeholder = document.createElement("option");
@@ -474,7 +474,7 @@ els.workflowForm.addEventListener("submit", (e) => {
       userIdentifier: els.workflowInput.value.trim(),
       sessionId: els.sessionIdInput.value.trim(),
     };
-    if (!value.sessionId) return;
+    if (!value.userIdentifier && !value.sessionId) return;
   } else {
     value = action?.options ? els.workflowSelect.value : els.workflowInput.value.trim();
   }
@@ -514,17 +514,17 @@ els.workflowSelect.addEventListener("change", () => {
 });
 els.workflowInput.addEventListener("input", () => {
   if (activeWorkflow?.requiresConsent) {
-    els.workflowRunBtn.disabled = !els.sessionIdInput.value.trim() || !els.sessionConsent.checked;
+    els.workflowRunBtn.disabled = !(els.workflowInput.value.trim() || els.sessionIdInput.value.trim()) || !els.sessionConsent.checked;
   }
 });
 els.sessionIdInput.addEventListener("input", () => {
   if (activeWorkflow?.requiresConsent) {
-    els.workflowRunBtn.disabled = !els.sessionIdInput.value.trim() || !els.sessionConsent.checked;
+    els.workflowRunBtn.disabled = !(els.workflowInput.value.trim() || els.sessionIdInput.value.trim()) || !els.sessionConsent.checked;
   }
 });
 els.sessionConsent.addEventListener("change", () => {
   if (activeWorkflow?.requiresConsent) {
-    els.workflowRunBtn.disabled = !els.sessionIdInput.value.trim() || !els.sessionConsent.checked;
+    els.workflowRunBtn.disabled = !(els.workflowInput.value.trim() || els.sessionIdInput.value.trim()) || !els.sessionConsent.checked;
   }
 });
 els.cancelBtn.addEventListener("click", closeSettings);

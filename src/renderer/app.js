@@ -135,7 +135,7 @@ function sanitizeAnswer(text) {
       continue;
     }
 
-    if (/^\s*(?:(?:[-*+]\s+|\d+[.)]\s+))?(?:\*\*)?(?:to retrieve\b|what you need instead\b|how to find this information\b|via the dynatrace ui\b)/i.test(line)) {
+    if (/^\s*(?:(?:[-*+]\s+|\d+[.)]\s+))?(?:\*\*)?(?:to (?:retrieve|assess|find|view|locate)\b|what you need(?: instead)?\b|how to find this information\b|via the dynatrace ui\b)/i.test(line)) {
       skipDirections = true;
       continue;
     }

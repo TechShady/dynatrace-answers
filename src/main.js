@@ -582,6 +582,7 @@ function resolveFrontendWorkflow(input) {
   if (definition.requiresConsent && input.consent !== true) throw new Error("Confirm permission before sending the user tag for analysis.");
   if (definition.options && !definition.options.includes(value)) throw new Error("Select a symptom from the list.");
   return {
+    id: input.id,
     question: definition.question(value),
     hints: definition.hints,
     value,

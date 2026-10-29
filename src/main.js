@@ -33,6 +33,7 @@ const DATA_MODE_INSTRUCTION =
   "to give a concise, evidence-based answer with concrete frontend names, counts, time ranges, and user impact. Never include DQL, " +
   "query text, URLs, links, or instructions to open or operate the Dynatrace UI. Do not suggest UI steps. Distinguish confirmed " +
   "Never tell the user to ask an administrator, enable Agentic AI, create or run DQL, or access Dynatrace. " +
+  "Do not include a section titled Data Limitations. If a data limitation matters, state it briefly inline and never instruct the on-call user to navigate the UI or run a query. " +
   "findings from missing or inconclusive telemetry. When frontend metric summaries are provided, cover both error trends and page " +
   "performance (P75 LCP and INP); do not treat error counts alone as overall health or label aggregate errors as JavaScript exceptions. " +
   "For a selected frontend, report its computed health_status and its own metric values. Never infer that a frontend is healthy or missing " +
@@ -723,6 +724,16 @@ async function querySessionHealth(creds, question, workflow, emit) {
   const matchedCount = userIdentifier && sessionId
     ? sameSessionMatches.length || (eventTagMatches && eventsBySession.has(sessionId) ? 1 : 0)
     : userIdentifier ? tagMatchedRecords.length || eventOnlySessions.length : sessionMatchedRecords.length || eventOnlySessions.length;
+  const newestSession = sessionDetails[0] || eventOnlySessions[0] || null;
+  const sessionErrorCount = sessionDetails.reduce((total, record) => total + (record.error_count || 0), 0);
+  const sessionsWithErrors = sessionDetails.filter((record) => (record.error_count || 0) > 0).length;
+  const frontendSessionCounts = sessionDetails.reduce((counts, record) => {
+    const names = record.frontend_names || [];
+    for (const name of (Array.isArray(names) ? names.flat(Infinity) : [names]).filter(Boolean)) {
+      counts[name] = (counts[name] || 0) + 1;
+    }
+    return counts;
+  }, {});
   const matchedFrontendNames = [...new Set([
     ...recordsForDetails.flatMap((record) => {
       const names = record.frontend_name || record["frontend.name"];
@@ -737,6 +748,11 @@ async function querySessionHealth(creds, question, workflow, emit) {
     requested_session_id: sessionId || null,
     match_status: matchStatus,
     matching_session_count: matchedCount,
+    sessions_returned: sessionDetails.length,
+    sessions_with_errors: sessionsWithErrors,
+    total_session_errors: sessionErrorCount,
+    sessions_by_frontend: frontendSessionCounts,
+    most_recent_session_deep_dive: newestSession,
     user_identifier_match_count: tagMatchedRecords.length || (eventTagMatches ? eventOnlySessions.length : 0),
     session_id_match_count: sessionMatchedRecords.length || (sessionId && eventsBySession.has(sessionId) ? 1 : 0),
     same_session_match_count: sameSessionMatches.length || (eventTagMatches && sessionId && eventsBySession.has(sessionId) ? 1 : 0),
@@ -765,7 +781,12 @@ async function querySessionHealth(creds, question, workflow, emit) {
           )));
       })()
     : [];
-  const records = [summary, ...sessionDetails, ...eventOnlySessions];
+  const newestSessionId = newestSession?.session_id;
+  const records = [
+    summary,
+    ...sessionDetails.filter((record) => record.session_id !== newestSessionId),
+    ...eventOnlySessions.filter((record) => record.session_id !== newestSessionId),
+  ];
   if (frontendMetrics.length) records.push({ record_type: "session_frontend_metrics", frontends: frontendMetrics });
   const dql = eventDql ? `${sessionDql}\n\n${eventDql}` : sessionDql;
   return { dql, recordCount: records.length, supplementary: buildSupplementary(question, dql, records) };

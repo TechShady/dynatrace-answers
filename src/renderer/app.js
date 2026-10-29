@@ -117,10 +117,36 @@ function addMessage(kind, content) {
 }
 
 function sanitizeAnswer(text) {
-  return String(text || "")
+  const cleaned = String(text || "")
     .replace(/If you want help with creating DQL queries,\s*ask your admin to enable Agentic AI\.?/gi, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\n{3,}/g, "\n\n");
+  const output = [];
+  let skipLimitations = false;
+  let skipDirections = false;
+
+  for (const line of cleaned.split(/\r?\n/)) {
+    const heading = line.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (skipLimitations) {
+      if (!heading) continue;
+      skipLimitations = false;
+    }
+    if (heading && /^data limitations\b/i.test(heading[1])) {
+      skipLimitations = true;
+      continue;
+    }
+
+    if (/^\s*(?:(?:[-*+]\s+|\d+[.)]\s+))?(?:\*\*)?(?:to retrieve\b|what you need instead\b|how to find this information\b|via the dynatrace ui\b)/i.test(line)) {
+      skipDirections = true;
+      continue;
+    }
+    if (skipDirections) {
+      if (!line.trim() || /^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(line)) continue;
+      skipDirections = false;
+    }
+    output.push(line);
+  }
+
+  return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function renderAnswer(div, result) {

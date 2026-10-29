@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("oncall", {
+contextBridge.exposeInMainWorld("answers", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   testConnection: (settings) => ipcRenderer.invoke("connection:test", settings),

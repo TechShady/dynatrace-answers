@@ -201,6 +201,51 @@ body {
   margin-bottom: 0;
 }
 
+.msg-ai h1,
+.msg-ai h2,
+.msg-ai h3 {
+  font-size: 16px;
+  margin: 14px 0 8px;
+}
+
+.msg-ai h4,
+.msg-ai h5,
+.msg-ai h6 {
+  font-size: 14px;
+  margin: 12px 0 6px;
+}
+
+.analysis-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+.analysis-table-wrap table {
+  width: 100%;
+  min-width: 600px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.analysis-table-wrap th,
+.analysis-table-wrap td {
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.analysis-table-wrap th {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.analysis-table-wrap code {
+  font-size: inherit;
+}
+
 .msg-ai pre {
   position: relative;
   background: #0b0e1a;

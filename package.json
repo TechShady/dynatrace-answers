@@ -1,19 +1,20 @@
 {
-  "name": "dynatrace-oncall",
-  "productName": "Dynatrace OnCall",
-  "version": "1.1.18",
-  "description": "Desktop chat client for Dynatrace Intelligence",
+  "name": "dynatrace-answers",
+  "productName": "Dynatrace Answers",
+  "version": "1.2.0",
+  "description": "Operational insights for every team, powered by Dynatrace Intelligence",
   "main": "src/main.js",
-  "author": "Dynatrace OnCall",
+  "author": "Dynatrace Answers",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
     "start": "electron .",
+    "test": "node test/formatting.cjs",
     "dist": "electron-builder --win nsis --publish never"
   },
   "build": {
-    "appId": "com.dynatrace.oncall",
-    "productName": "Dynatrace OnCall",
+    "appId": "com.dynatrace.answers",
+    "productName": "Dynatrace Answers",
     "files": [
       "src/**/*",
       "package.json"
@@ -32,17 +33,23 @@
       ]
     },
     "nsis": {
+      "guid": "628d508c-a007-5629-97a0-e53910f02cfa",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Dynatrace OnCall",
-      "artifactName": "Dynatrace-OnCall-Setup-${version}.${ext}"
+      "shortcutName": "Dynatrace Answers",
+      "artifactName": "Dynatrace-Answers-Setup-${version}.${ext}"
     }
   },
   "devDependencies": {
     "electron": "^44.9.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "pdfjs-dist": "^6.4.299"
+  },
+  "dependencies": {
+    "markdown-it": "^15.0.3",
+    "sanitize-html": "^2.18.1"
   }
 }

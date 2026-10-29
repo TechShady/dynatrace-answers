@@ -6,14 +6,14 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
-    <title>Dynatrace OnCall</title>
+    <title>Dynatrace Answers</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <span class="logo" aria-hidden="true"></span>
-        <span class="brand-name">Dynatrace OnCall</span>
+        <span class="brand-name">Dynatrace Answers</span>
       </div>
       <div class="topbar-right">
         <span id="connectionStatus" class="status status-unknown">Not configured</span>
@@ -27,7 +27,7 @@
     <main class="chat-layout">
       <section id="messages" class="messages" aria-live="polite">
         <div id="emptyState" class="empty-state">
-          <h1>Ask Dynatrace Intelligence</h1>
+          <h1>Ask Dynatrace Answers</h1>
           <p>Choose a frontend health check or ask a question about the telemetry.</p>
         </div>
       </section>
@@ -160,6 +160,7 @@
       </div>
     </div>
 
+    <script src="../../node_modules/markdown-it/dist/browser/markdown-it.umd.min.js"></script>
     <script src="markdown.js"></script>
     <script src="app.js"></script>
   </body>

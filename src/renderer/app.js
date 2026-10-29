@@ -1,6 +1,6 @@
 "use strict";
 
-const api = window.oncall;
+const api = window.answers;
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -522,7 +522,8 @@ async function exportChatPdf() {
     role: element.classList.contains("msg-user") ? "user" :
       element.classList.contains("msg-ai") ? "assistant" :
       element.classList.contains("msg-error") ? "error" : null,
-    text: element.innerText.trim(),
+    text: element.textContent.trim(),
+    html: element.innerHTML,
     timestamp: element.dataset.timestamp,
   })).filter((message) => message.role && message.text);
   if (!messages.length || busy) return;

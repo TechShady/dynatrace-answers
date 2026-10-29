@@ -1,15 +1,15 @@
 [CmdletBinding()]
 param(
-  [string]$Repository = "TechShady/dynatrace-oncall"
+  [string]$Repository = "TechShady/dynatrace-answers"
 )
 
 $ErrorActionPreference = "Stop"
-$installerPattern = '^Dynatrace-OnCall-Setup-[0-9]+(?:\.[0-9]+){1,3}\.exe$'
+$installerPattern = '^Dynatrace-Answers-Setup-[0-9]+(?:\.[0-9]+){1,3}\.exe$'
 $apiBase = "https://api.github.com/repos/$Repository"
 $headers = @{
   Accept = "application/vnd.github+json"
   "X-GitHub-Api-Version" = "2022-11-28"
-  "User-Agent" = "Dynatrace-OnCall-Installer"
+  "User-Agent" = "Dynatrace-Answers-Installer"
 }
 
 $githubToken = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
@@ -21,7 +21,7 @@ $tempDirectory = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToStrin
 New-Item -ItemType Directory -Path $tempDirectory | Out-Null
 
 try {
-  Write-Host "Checking the latest Dynatrace OnCall release..."
+  Write-Host "Checking the latest Dynatrace Answers release..."
   $release = Invoke-RestMethod -Uri "$apiBase/releases/latest" -Headers $headers
   $installerAsset = @($release.assets) | Where-Object { $_.name -match $installerPattern } | Select-Object -First 1
   if (-not $installerAsset) {
@@ -59,7 +59,7 @@ try {
   if ($process.ExitCode -ne 0) {
     throw "The installer exited with code $($process.ExitCode)."
   }
-  Write-Host "Dynatrace OnCall installation completed."
+  Write-Host "Dynatrace Answers installation completed."
 } catch {
   Write-Error $_
   exit 1

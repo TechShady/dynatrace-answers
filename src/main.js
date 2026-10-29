@@ -3,6 +3,7 @@
 const { app, BrowserWindow, dialog, ipcMain, safeStorage, Menu } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const sanitizeHtml = require("sanitize-html");
 
 const SKILLS_PATH = "/platform/davis/copilot/v1/skills";
 const QUERY_PATH = "/platform/storage/query/v1";
@@ -29,11 +30,11 @@ const FRONTEND_PROBLEMS_DQL =
   "| limit 50";
 
 const DATA_MODE_INSTRUCTION =
-  "You are assisting an on-call engineer who cannot access the Dynatrace UI. Use the supplementary context and its query results " +
+  "You are Dynatrace Answers, assisting help desk staff, executives, and other teams who cannot access the Dynatrace UI. Use the supplementary context and its query results " +
   "to give a concise, evidence-based answer with concrete frontend names, counts, time ranges, and user impact. Never include DQL, " +
   "query text, URLs, links, or instructions to open or operate the Dynatrace UI. Do not suggest UI steps. Distinguish confirmed " +
   "Never tell the user to ask an administrator, enable Agentic AI, create or run DQL, or access Dynatrace. " +
-  "Do not include a section titled Data Limitation or Data Limitations. If a data limitation matters, state it briefly inline and never instruct the on-call user to navigate the UI or run a query. " +
+  "Do not include a section titled Data Limitation or Data Limitations. If a data limitation matters, state it briefly inline and never instruct the user to navigate the UI or run a query. " +
   "findings from missing or inconclusive telemetry. When frontend metric summaries are provided, cover both error trends and page " +
   "performance (P75 LCP and INP); do not treat error counts alone as overall health or label aggregate errors as JavaScript exceptions. " +
   "For a selected frontend, report its computed health_status and its own metric values. Never infer that a frontend is healthy or missing " +
@@ -63,7 +64,7 @@ const FRONTEND_WORKFLOWS = {
     question: (value) => value.sessionId
       ? `Assess session ID ${JSON.stringify(value.sessionId)}${value.userIdentifier ? ` for user identifier/tag ${JSON.stringify(value.userIdentifier)}` : ""}. Verify the identifiers refer to the same session, give an overall summary, then a deep dive on that session and the latest five session records (with IDs) when available.`
       : `Assess every session from the last seven days for user identifier/tag ${JSON.stringify(value.userIdentifier)}. Give an overall summary, a deep dive on the most recent session, and a concise list of the five most recent sessions with their IDs and key activity.`,
-    hints: "Use the structured session report provided by the app. Start with the overall summary, deep-dive the newest session, then list the latest five session IDs and key metrics. Tag-only mode covers all matching sessions from the last seven days. Do not direct the on-call user to the Dynatrace UI, and do not call a session healthy unless its own data supports that conclusion.",
+    hints: "Use the structured session report provided by the app. Start with the overall summary, deep-dive the newest session, then list the latest five session IDs and key metrics. Tag-only mode covers all matching sessions from the last seven days. Do not direct the user to the Dynatrace UI, and do not call a session healthy unless its own data supports that conclusion.",
   },
   "impact-scope": {
     requiresInput: true,
@@ -98,6 +99,13 @@ function settingsFile() {
 
 function loadSettings() {
   try {
+    if (!fs.existsSync(settingsFile())) {
+      const previousSettings = path.join(app.getPath("appData"), "Dynatrace OnCall", "settings.json");
+      if (fs.existsSync(previousSettings)) {
+        fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+        fs.copyFileSync(previousSettings, settingsFile(), fs.constants.COPYFILE_EXCL);
+      }
+    }
     const raw = JSON.parse(fs.readFileSync(settingsFile(), "utf8"));
     return {
       tenantUrl: typeof raw.tenantUrl === "string" ? raw.tenantUrl : "",
@@ -335,21 +343,35 @@ function escapePdfHtml(value) {
 function buildPdfHtml(messages) {
   const generatedAt = new Date().toLocaleString();
   const transcript = messages.map((message) => {
-    const role = message.role === "assistant" ? "Dynatrace Intelligence" : message.role === "error" ? "Error" : "On-call";
+    const role = message.role === "assistant" ? "Dynatrace Answers" : message.role === "error" ? "Error" : "User";
     const timestamp = message.timestamp ? new Date(message.timestamp).toLocaleString() : "";
-    return `<article><header><strong>${role}</strong><time>${escapePdfHtml(timestamp)}</time></header><pre>${escapePdfHtml(message.text)}</pre></article>`;
+    const content = message.html ? sanitizeHtml(message.html, {
+      allowedTags: ["section", "div", "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "strong", "em", "span", "code", "pre", "blockquote", "table", "thead", "tbody", "tr", "th", "td", "hr", "br"],
+      allowedAttributes: {},
+      transformTags: { button: "span", summary: "h4" },
+    }) : `<pre>${escapePdfHtml(message.text)}</pre>`;
+    return `<article><header><strong>${role}</strong><time>${escapePdfHtml(timestamp)}</time></header>${content}</article>`;
   }).join("");
 
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Dynatrace OnCall Case Notes</title><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Dynatrace Answers Case Notes</title><style>
     @page { size: A4; margin: 18mm; }
     body { color: #172033; font: 10.5pt/1.5 "Segoe UI", Arial, sans-serif; }
     h1 { margin: 0 0 4pt; font-size: 19pt; }
     .generated { color: #526071; font-size: 9pt; margin-bottom: 20pt; }
-    article { break-inside: avoid; border: 1px solid #d5dce5; border-radius: 5px; margin: 0 0 12pt; padding: 10pt 12pt; }
-    header { display: flex; justify-content: space-between; gap: 12pt; border-bottom: 1px solid #e4e9ef; padding-bottom: 5pt; margin-bottom: 7pt; }
+    article { break-inside: auto; margin: 0 0 12pt; padding: 8pt 0; border-top: 1px solid #d5dce5; }
+    header { display: flex; justify-content: space-between; gap: 12pt; padding-bottom: 5pt; margin-bottom: 7pt; break-after: avoid; break-inside: avoid; }
     time { color: #526071; font-size: 8.5pt; }
+    article h1, article h2, article h3, article h4, article h5, article h6 { font-size: 12pt; margin: 12pt 0 5pt; break-after: avoid; break-inside: avoid; }
+    p, ul, ol, blockquote { margin: 0 0 7pt; }
+    p, li { orphans: 3; widows: 3; }
+    table { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 8pt 0; font-size: 8pt; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+    th, td { padding: 4pt; text-align: left; vertical-align: top; border: 1px solid #d5dce5; overflow-wrap: anywhere; }
+    th { background: #edf1f6; font-weight: 600; }
+    code { overflow-wrap: anywhere; font-size: 9pt; }
     pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
-  </style></head><body><h1>Dynatrace OnCall Case Notes</h1><div class="generated">Exported ${escapePdfHtml(generatedAt)}</div>${transcript}</body></html>`;
+  </style></head><body><h1>Dynatrace Answers Case Notes</h1><div class="generated">Exported ${escapePdfHtml(generatedAt)}</div>${transcript}</body></html>`;
 }
 
 function numericMetric(record, field) {
@@ -1131,14 +1153,15 @@ function registerIpc() {
       .map((message) => ({
         role: message.role,
         text: String(message.text || "").slice(0, 30000),
+        html: String(message.html || "").slice(0, 300000),
         timestamp: String(message.timestamp || ""),
       }))
       .filter((message) => message.text.trim());
     if (!messages.length) throw new Error("There is no chat content to export.");
 
     const saveResult = await dialog.showSaveDialog(mainWindow, {
-      title: "Export On-call Chat",
-      defaultPath: path.join(app.getPath("downloads"), `Dynatrace-OnCall-Case-${new Date().toISOString().slice(0, 10)}.pdf`),
+      title: "Export Answers Chat",
+      defaultPath: path.join(app.getPath("downloads"), `Dynatrace-Answers-Case-${new Date().toISOString().slice(0, 10)}.pdf`),
       filters: [{ name: "PDF document", extensions: ["pdf"] }],
     });
     if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
@@ -1154,6 +1177,7 @@ function registerIpc() {
       const pdf = await pdfWindow.webContents.printToPDF({
         pageSize: "A4",
         printBackground: true,
+        preferCSSPageSize: true,
         margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 },
       });
       fs.writeFileSync(saveResult.filePath, pdf);
@@ -1171,7 +1195,7 @@ function createWindow() {
     height: 780,
     minWidth: 720,
     minHeight: 520,
-    title: "Dynatrace OnCall",
+    title: "Dynatrace Answers",
     backgroundColor: "#0f1220",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

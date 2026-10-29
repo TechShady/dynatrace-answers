@@ -69,7 +69,8 @@ async function verifyFormatting() {
     });
   });
   const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const pdf = await getDocument({ data: new Uint8Array(fs.readFileSync(pdfPath)), useSystemFonts: true }).promise;
+  const loadingTask = getDocument({ data: new Uint8Array(fs.readFileSync(pdfPath)), useSystemFonts: true });
+  const pdf = await loadingTask.promise;
   try {
     assert.ok(pdf.numPages > 1, "Fixture must exercise multiple pages");
     const pages = [];
@@ -94,7 +95,7 @@ async function verifyFormatting() {
     }
     console.log(`PASS: single/multi-session Markdown, safe PDF HTML, first-page content, ${pdf.numPages} populated pages, repeated headers, 60 intact rows.`);
   } finally {
-    await pdf.destroy();
+    await loadingTask.destroy();
   }
 }
 

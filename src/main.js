@@ -60,7 +60,7 @@ const FRONTEND_WORKFLOWS = {
     requiresInput: true,
     requiresConsent: true,
     question: (value) => `Assess the recent health for user tag ${JSON.stringify(value)}. Report matching session errors where available, plus error trends and LCP/INP for the frontend applications used by those sessions. Distinguish session-specific findings from frontend-wide impact.`,
-    hints: "The context includes user.sessions matched by dt.rum.user_tag and frontend metric comparisons. Cover both session errors and frontend error/performance metrics. user.sessions records may lag by 30+ minutes; do not interpret missing recent sessions as proof of no user impact.",
+    hints: "Session results are the primary evidence. If matching_sessions is zero or the query failed, say the specific session could not be assessed; never substitute the fleet-wide rankings or claim the user is healthy. A missing match can mean the tag is absent, the session is not finalized yet, or it is outside the queried window. Only use frontend metrics for frontends explicitly listed by matched sessions.",
   },
   "impact-scope": {
     requiresInput: true,
@@ -532,6 +532,34 @@ function buildDavisProblemContext(problems, selectedFrontend, queryError) {
   };
 }
 
+function buildSessionHealthContext(userTag, sessionRecords, sessionQueryError, summaries, problems, problemQueryError) {
+  const matchingSessions = sessionQueryError
+    ? null
+    : numericMetric(sessionRecords[0], "matching_sessions") ?? 0;
+  const hasMatchedSession = matchingSessions > 0;
+  const sessionFrontendNames = hasMatchedSession
+    ? sessionRecords.flatMap((record) => {
+        const names = record.frontend_names;
+        return Array.isArray(names) ? names.flat(Infinity).filter(Boolean) : names ? [names] : [];
+      }).map((name) => String(name).toLowerCase())
+    : [];
+
+  return {
+    user_tag: userTag,
+    session_status: sessionQueryError ? "query_failed" : hasMatchedSession ? "matched" : "no_matching_session",
+    matching_session_count: matchingSessions,
+    session_query_error: sessionQueryError,
+    session_records: hasMatchedSession ? sessionRecords : [],
+    session_frontend_metrics: summaries
+      .filter((summary) => sessionFrontendNames.includes(summary.frontend_name.toLowerCase()))
+      .map(compactFrontendMetricSummary),
+    session_assessment_note: hasMatchedSession
+      ? "Frontend metrics are included only for applications listed on the matched sessions."
+      : "No session-specific health verdict is possible without a matching session record. Absence of a record does not mean the user was unaffected.",
+    ...(hasMatchedSession ? { davis_problem_context: buildDavisProblemContext(problems, null, problemQueryError) } : {}),
+  };
+}
+
 function sessionCountQuery(question) {
   if (!/\bsessions?\b/i.test(question) || !/\berrors?\b/i.test(question)) return null;
   const application = question.match(/\b[A-Za-z0-9-]+_[A-Za-z0-9_-]+\b/);
@@ -640,20 +668,14 @@ async function queryEnvironment(creds, question, emit, workflow) {
         } catch (err) {
           sessionQueryError = err.message;
         }
-        const sessionFrontendNames = sessionRecords.flatMap((record) => {
-          const names = record.frontend_names;
-          return Array.isArray(names) ? names.flat(Infinity).filter(Boolean) : names ? [names] : [];
-        }).map((name) => String(name).toLowerCase());
-        records = [{
-          user_tag: workflow.value,
-          session_records: sessionRecords,
-          session_query_error: sessionQueryError,
-          session_frontend_metrics: summaries
-            .filter((summary) => sessionFrontendNames.includes(summary.frontend_name.toLowerCase()))
-            .map(compactFrontendMetricSummary),
-          overall_frontend_health: prioritizeFrontendMetrics(summaries),
-          davis_problem_context: buildDavisProblemContext(davisProblems, null, davisProblemQueryError),
-        }];
+        records = [buildSessionHealthContext(
+          workflow.value,
+          sessionRecords,
+          sessionQueryError,
+          summaries,
+          davisProblems,
+          davisProblemQueryError
+        )];
       } else {
         records = [{
           workflow: workflow.id,

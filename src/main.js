@@ -275,7 +275,7 @@ async function generateDql(creds, text) {
   return json.dql;
 }
 
-async function runDql(creds, query, maxResultRecords = QUERY_MAX_RECORDS) {
+async function runDql(creds, query, maxResultRecords = QUERY_MAX_RECORDS, timeframeStart = null) {
   const post = (path, body) =>
     callDynatrace(
       creds,
@@ -286,7 +286,7 @@ async function runDql(creds, query, maxResultRecords = QUERY_MAX_RECORDS) {
 
   let r = await post(`${QUERY_PATH}/query:execute`, {
     query,
-    defaultTimeframeStart: new Date(Date.now() - DEFAULT_TIMEFRAME_MS).toISOString(),
+    defaultTimeframeStart: timeframeStart || new Date(Date.now() - DEFAULT_TIMEFRAME_MS).toISOString(),
     defaultTimeframeEnd: new Date().toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     locale: "en_US",
@@ -593,22 +593,23 @@ async function querySessionHealth(creds, question, workflow, emit) {
   const sessionLookback = sessionId ? "30d" : "7d";
   const filters = [];
   if (userIdentifier) {
-    filters.push(`user.identifier == ${JSON.stringify(userIdentifier)}`);
-    filters.push(`dt.rum.user_tag == ${JSON.stringify(userIdentifier)}`);
+    filters.push(`matchesValue(user.identifier, ${JSON.stringify(userIdentifier)})`);
   }
   if (sessionId) filters.push(`dt.rum.session.id == ${JSON.stringify(sessionId)}`);
 
-  const sessionDql = `fetch user.sessions, from:now()-${sessionLookback}, to:now()\n` +
+  const sessionDql = "fetch user.sessions\n" +
     '| filter dt.system.bucket != "default_synthetic_user_sessions"\n' +
     `| filter ${filters.join(" or ")}\n` +
     "| sort start_time desc\n" +
-    "| limit 500\n" +
-    "| fields dt.rum.session.id, start_time, end_time, user.identifier, dt.rum.user_tag, frontend.name, " +
-    "duration = toDouble(duration), error.count, navigation_count, user_interaction_count, user_action_count, " +
-    "request_count, page_summary_count, view_summary_count, browser.name, device.type, os.name";
+    "| limit 1000\n" +
+    "| fields dt.rum.session.id, start_time, user.identifier = coalesce(user.identifier, dt.rum.user_tag), " +
+    "frontend.name, geo.country.name, geo.city.name, characteristics.has_replay, browser.name, " +
+    "duration = toDouble(duration), navigation_count, user_interaction_count, app.version, dt.rum.user_type, " +
+    "error.count, request_count, page_summary_count, user_action_count, characteristics.is_bounce";
 
   emit({ type: "progress", message: "Looking up matching session records..." });
-  const sessionRecords = await runDql(creds, sessionDql, 500);
+  const timeframeStart = new Date(Date.now() - (sessionId ? 30 : 7) * 24 * 60 * 60 * 1000).toISOString();
+  const sessionRecords = await runDql(creds, sessionDql, 1000, timeframeStart);
   const tagMatches = (record) => [record["user.identifier"], record["dt.rum.user_tag"]]
     .some((value) => String(value || "").toLowerCase() === userIdentifier.toLowerCase());
   const tagMatchedRecords = userIdentifier ? sessionRecords.filter(tagMatches) : [];
@@ -644,7 +645,7 @@ async function querySessionHealth(creds, question, workflow, emit) {
   let eventQueryError = null;
   if (eventFilter) {
     emit({ type: "progress", message: "Retrieving page, interaction, and error activity..." });
-    eventDql = `fetch user.events, from:now()-${sessionLookback}, to:now()\n` +
+    eventDql = "fetch user.events\n" +
       `| filter ${eventFilter}\n` +
       "| fields timestamp, dt.rum.session.id, frontend.name, user.identifier, dt.rum.user_tag, " +
       "characteristics.has_page_summary, characteristics.has_user_interaction, characteristics.has_error, " +
@@ -652,7 +653,7 @@ async function querySessionHealth(creds, question, workflow, emit) {
       "| sort timestamp desc\n" +
       "| limit 1000";
     try {
-      eventRecords = await runDql(creds, eventDql, 1000);
+      eventRecords = await runDql(creds, eventDql, 1000, timeframeStart);
       if (eventSessionIds.length) {
         const allowedSessionIds = new Set(eventSessionIds);
         eventRecords = eventRecords.filter((event) => allowedSessionIds.has(event["dt.rum.session.id"]));

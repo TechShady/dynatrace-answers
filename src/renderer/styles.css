@@ -426,6 +426,80 @@ select:focus {
   font-size: 12px;
 }
 
+.session-report {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-report h3,
+.session-report h4 {
+  margin: 10px 0 6px;
+}
+
+.session-summary-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 4px 18px;
+  margin: 6px 0 12px;
+  padding-left: 18px;
+}
+
+.session-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 8px 0 12px;
+}
+
+.session-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.session-table th,
+.session-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.session-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.session-id-link {
+  max-width: 210px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.session-id-link:hover {
+  color: var(--primary-hover);
+}
+
+.assistant-commentary {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.assistant-commentary summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
 .scopes {
   background: var(--bg);
   border: 1px solid var(--border);

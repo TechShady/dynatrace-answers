@@ -63,7 +63,7 @@ const FRONTEND_WORKFLOWS = {
     question: (value) => value.sessionId
       ? `Assess session ID ${JSON.stringify(value.sessionId)}${value.userIdentifier ? ` for user identifier/tag ${JSON.stringify(value.userIdentifier)}` : ""}. Verify the identifiers refer to the same session, give an overall summary, then a deep dive on that session and the latest five session records (with IDs) when available.`
       : `Assess every session from the last seven days for user identifier/tag ${JSON.stringify(value.userIdentifier)}. Give an overall summary, a deep dive on the most recent session, and a concise list of the five most recent sessions with their IDs and key activity.`,
-    hints: "Session-specific records are primary evidence. Tag-only mode returns all matching sessions in the last seven days. Start with counts/error summary, then deep-dive the most recent session, then list the latest five session IDs and key metrics. If an ID is supplied, use that session for the deep dive. If both are supplied, verify they match the same session. If no records match, say so plainly; never substitute fleet-wide metrics or call the user healthy. Never label a section Data Limitation(s).",
+    hints: "Use the structured session report provided by the app. Start with the overall summary, deep-dive the newest session, then list the latest five session IDs and key metrics. Tag-only mode covers all matching sessions from the last seven days. Do not direct the on-call user to the Dynatrace UI, and do not call a session healthy unless its own data supports that conclusion.",
   },
   "impact-scope": {
     requiresInput: true,
@@ -756,6 +756,7 @@ async function querySessionHealth(creds, question, workflow, emit) {
     most_recent_session_deep_dive: newestSession,
     latest_five_sessions: sessionDetails.slice(0, 5).map((record) => ({
       session_id: record.session_id,
+      user_identifier: record.user_identifier,
       start_time: record.start_time,
       frontend_names: record.frontend_names,
       error_count: record.error_count,
@@ -801,7 +802,16 @@ async function querySessionHealth(creds, question, workflow, emit) {
   ];
   if (frontendMetrics.length) records.push({ record_type: "session_frontend_metrics", frontends: frontendMetrics });
   const dql = eventDql ? `${sessionDql}\n\n${eventDql}` : sessionDql;
-  return { dql, recordCount: records.length, supplementary: buildSupplementary(question, dql, records) };
+  return {
+    dql,
+    recordCount: records.length,
+    supplementary: buildSupplementary(question, dql, records),
+    sessionReport: {
+      summary,
+      mostRecentSession: newestSession,
+      latestFiveSessions: summary.latest_five_sessions,
+    },
+  };
 }
 
 async function queryEnvironment(creds, question, emit, workflow) {
@@ -1107,7 +1117,11 @@ function registerIpc() {
         };
       }
     );
-    return { ...answer, sources: [] };
+    return {
+      ...answer,
+      sources: [],
+      ...(data?.sessionReport ? { sessionReport: data.sessionReport } : {}),
+    };
   });
 
   ipcMain.handle("chat:export-pdf", async (_event, input) => {

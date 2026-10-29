@@ -153,8 +153,156 @@ function sanitizeAnswer(text) {
   return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function formatSessionTime(value) {
+  if (!value) return "Not available";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function openSessionAnalysis(sessionId, userIdentifier) {
+  const action = FRONTEND_ACTIONS.find((item) => item.id === "session-health");
+  if (!action || !sessionId) return;
+  startWorkflow(action);
+  els.workflowInput.value = userIdentifier || "";
+  els.sessionIdInput.value = sessionId;
+  els.sessionConsent.checked = false;
+  els.workflowRunBtn.disabled = true;
+  els.sessionIdInput.focus();
+}
+
+function createSessionIdButton(sessionId, userIdentifier) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "session-id-link";
+  button.textContent = sessionId;
+  button.title = "Analyze this session";
+  button.addEventListener("click", () => openSessionAnalysis(sessionId, userIdentifier));
+  return button;
+}
+
+function appendSessionMetric(list, label, value) {
+  const item = document.createElement("li");
+  const term = document.createElement("strong");
+  term.textContent = `${label}: `;
+  const description = document.createElement("span");
+  description.textContent = value === null || value === undefined || value === "" ? "Not available" : String(value);
+  item.append(term, description);
+  list.appendChild(item);
+}
+
+function renderSessionReport(container, report) {
+  const section = document.createElement("section");
+  section.className = "session-report";
+  const summary = report.summary || {};
+  const heading = document.createElement("h3");
+  heading.textContent = "Session Summary";
+  section.appendChild(heading);
+
+  const overview = document.createElement("p");
+  overview.textContent = summary.match_status === "user_identifier_matched_all_sessions"
+    ? `Found ${summary.matching_session_count ?? 0} sessions for ${summary.requested_user_identifier || "the selected user"} in ${summary.session_window || "the queried period"}.`
+    : summary.match_status === "no_matching_records"
+    ? `No sessions matched ${summary.requested_user_identifier || summary.requested_session_id || "the supplied identifiers"} in ${summary.session_window || "the queried period"}. No session-specific health conclusion can be made.`
+    : summary.match_status === "identifiers_do_not_match_same_session"
+    ? "The user identifier and session ID did not resolve to the same session. Review the matching records below before drawing a conclusion."
+    : `Session lookup status: ${summary.match_status || "unknown"}.`;
+  section.appendChild(overview);
+
+  const totals = document.createElement("ul");
+  totals.className = "session-summary-list";
+  appendSessionMetric(totals, "Sessions returned", summary.sessions_returned ?? summary.matching_session_count);
+  appendSessionMetric(totals, "Sessions with errors", summary.sessions_with_errors);
+  appendSessionMetric(totals, "Total session errors", summary.total_session_errors);
+  if (summary.session_results_truncated) appendSessionMetric(totals, "Coverage", "At least 500 matching sessions; list is capped");
+  section.appendChild(totals);
+
+  const newest = report.mostRecentSession || summary.most_recent_session_deep_dive;
+  if (newest) {
+    const deepDiveTitle = document.createElement("h4");
+    deepDiveTitle.textContent = "Most Recent Session";
+    section.appendChild(deepDiveTitle);
+    const deepDive = document.createElement("ul");
+    deepDive.className = "session-summary-list";
+    const idItem = document.createElement("li");
+    const idLabel = document.createElement("strong");
+    idLabel.textContent = "Session ID: ";
+    idItem.append(idLabel, createSessionIdButton(newest.session_id, newest.user_identifier || summary.requested_user_identifier));
+    deepDive.appendChild(idItem);
+    appendSessionMetric(deepDive, "User tag", newest.user_identifier || summary.requested_user_identifier);
+    appendSessionMetric(deepDive, "Started", formatSessionTime(newest.start_time));
+    appendSessionMetric(deepDive, "Frontend", Array.isArray(newest.frontend_names) ? newest.frontend_names.join(", ") : newest.frontend_names);
+    appendSessionMetric(deepDive, "Errors", newest.error_count);
+    appendSessionMetric(deepDive, "Navigations", newest.navigation_count);
+    appendSessionMetric(deepDive, "Page views", newest.page_summary_count);
+    appendSessionMetric(deepDive, "User actions", newest.user_action_count);
+    appendSessionMetric(deepDive, "Requests", newest.request_count);
+    appendSessionMetric(deepDive, "Duration (ns)", newest.duration_ns);
+    if (newest.event_activity) {
+      appendSessionMetric(deepDive, "Events", newest.event_activity.event_count);
+      appendSessionMetric(deepDive, "Event errors", newest.event_activity.error_event_count);
+    }
+    section.appendChild(deepDive);
+  }
+
+  const latestFive = report.latestFiveSessions || summary.latest_five_sessions || [];
+  if (latestFive.length) {
+    const listTitle = document.createElement("h4");
+    listTitle.textContent = "Five Most Recent Sessions";
+    section.appendChild(listTitle);
+
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "session-table-wrap";
+    const table = document.createElement("table");
+    table.className = "session-table";
+    const header = document.createElement("tr");
+    ["Session ID", "User tag", "Started", "Frontend", "Errors", "Navigations", "Actions", "Requests"].forEach((label) => {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      header.appendChild(cell);
+    });
+    const thead = document.createElement("thead");
+    thead.appendChild(header);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    latestFive.forEach((session) => {
+      const row = document.createElement("tr");
+      const idCell = document.createElement("td");
+      idCell.appendChild(createSessionIdButton(session.session_id, session.user_identifier || summary.requested_user_identifier));
+      row.appendChild(idCell);
+      const frontend = Array.isArray(session.frontend_names) ? session.frontend_names.join(", ") : session.frontend_names;
+      [session.user_identifier || summary.requested_user_identifier, formatSessionTime(session.start_time), frontend, session.error_count, session.navigation_count, session.user_action_count, session.request_count].forEach((value) => {
+        const cell = document.createElement("td");
+        cell.textContent = value === null || value === undefined || value === "" ? "-" : String(value);
+        row.appendChild(cell);
+      });
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+    section.appendChild(tableWrap);
+  }
+
+  container.appendChild(section);
+}
+
 function renderAnswer(div, result) {
-  div.innerHTML = window.renderMarkdown(sanitizeAnswer(result.text) || "_No answer returned._");
+  div.innerHTML = "";
+  if (result.sessionReport) {
+    renderSessionReport(div, result.sessionReport);
+    const additional = document.createElement("details");
+    additional.className = "assistant-commentary";
+    const summary = document.createElement("summary");
+    summary.textContent = "Additional analysis";
+    const narrative = document.createElement("div");
+    narrative.innerHTML = window.renderMarkdown(sanitizeAnswer(result.text) || "_No additional analysis returned._");
+    additional.append(summary, narrative);
+    div.appendChild(additional);
+  } else {
+    const narrative = document.createElement("div");
+    narrative.innerHTML = window.renderMarkdown(sanitizeAnswer(result.text) || "_No answer returned._");
+    div.appendChild(narrative);
+  }
 
   if (result.notifications?.length) {
     const box = document.createElement("div");

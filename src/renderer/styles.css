@@ -97,6 +97,12 @@ body {
   color: var(--muted);
 }
 
+.app-version {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .btn {
   font: inherit;
   color: var(--text);

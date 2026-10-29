@@ -33,7 +33,7 @@ const DATA_MODE_INSTRUCTION =
   "to give a concise, evidence-based answer with concrete frontend names, counts, time ranges, and user impact. Never include DQL, " +
   "query text, URLs, links, or instructions to open or operate the Dynatrace UI. Do not suggest UI steps. Distinguish confirmed " +
   "Never tell the user to ask an administrator, enable Agentic AI, create or run DQL, or access Dynatrace. " +
-  "Do not include a section titled Data Limitations. If a data limitation matters, state it briefly inline and never instruct the on-call user to navigate the UI or run a query. " +
+  "Do not include a section titled Data Limitation or Data Limitations. If a data limitation matters, state it briefly inline and never instruct the on-call user to navigate the UI or run a query. " +
   "findings from missing or inconclusive telemetry. When frontend metric summaries are provided, cover both error trends and page " +
   "performance (P75 LCP and INP); do not treat error counts alone as overall health or label aggregate errors as JavaScript exceptions. " +
   "For a selected frontend, report its computed health_status and its own metric values. Never infer that a frontend is healthy or missing " +
@@ -61,9 +61,9 @@ const FRONTEND_WORKFLOWS = {
     requiresInput: true,
     requiresConsent: true,
     question: (value) => value.sessionId
-      ? `Assess session ID ${JSON.stringify(value.sessionId)}${value.userIdentifier ? ` for user identifier/tag ${JSON.stringify(value.userIdentifier)}` : ""}. Report activity for the matching session. If both identifiers were supplied, verify whether they match the same session.`
-      : `Assess every session from the last seven days for user identifier/tag ${JSON.stringify(value.userIdentifier)}. Summarize activity, errors, frontend, and timing for each matching session.`,
-    hints: "Session-specific records are primary evidence. A tag-only request returns every matching session from the last seven days; an ID-only request returns that session. Compare user.identifier and dt.rum.user_tag as scalar strings, and if both inputs are supplied verify they match the same session. If no records or events match, say so plainly; never substitute fleet-wide metrics or call the user healthy.",
+      ? `Assess session ID ${JSON.stringify(value.sessionId)}${value.userIdentifier ? ` for user identifier/tag ${JSON.stringify(value.userIdentifier)}` : ""}. Verify the identifiers refer to the same session, give an overall summary, then a deep dive on that session and the latest five session records (with IDs) when available.`
+      : `Assess every session from the last seven days for user identifier/tag ${JSON.stringify(value.userIdentifier)}. Give an overall summary, a deep dive on the most recent session, and a concise list of the five most recent sessions with their IDs and key activity.`,
+    hints: "Session-specific records are primary evidence. Tag-only mode returns all matching sessions in the last seven days. Start with counts/error summary, then deep-dive the most recent session, then list the latest five session IDs and key metrics. If an ID is supplied, use that session for the deep dive. If both are supplied, verify they match the same session. If no records match, say so plainly; never substitute fleet-wide metrics or call the user healthy. Never label a section Data Limitation(s).",
   },
   "impact-scope": {
     requiresInput: true,
@@ -119,6 +119,7 @@ function publicSettings(settings) {
     tenantUrl: settings.tenantUrl,
     hasToken: Boolean(settings.tokenEnc),
     dataMode: settings.dataMode,
+    version: app.getVersion(),
   };
 }
 
@@ -753,6 +754,17 @@ async function querySessionHealth(creds, question, workflow, emit) {
     total_session_errors: sessionErrorCount,
     sessions_by_frontend: frontendSessionCounts,
     most_recent_session_deep_dive: newestSession,
+    latest_five_sessions: sessionDetails.slice(0, 5).map((record) => ({
+      session_id: record.session_id,
+      start_time: record.start_time,
+      frontend_names: record.frontend_names,
+      error_count: record.error_count,
+      navigation_count: record.navigation_count,
+      user_interaction_count: record.user_interaction_count,
+      user_action_count: record.user_action_count,
+      request_count: record.request_count,
+      page_summary_count: record.page_summary_count,
+    })),
     user_identifier_match_count: tagMatchedRecords.length || (eventTagMatches ? eventOnlySessions.length : 0),
     session_id_match_count: sessionMatchedRecords.length || (sessionId && eventsBySession.has(sessionId) ? 1 : 0),
     same_session_match_count: sameSessionMatches.length || (eventTagMatches && sessionId && eventsBySession.has(sessionId) ? 1 : 0),

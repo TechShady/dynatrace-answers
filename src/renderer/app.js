@@ -14,6 +14,7 @@ const els = {
   exportPdfBtn: $("exportPdfBtn"),
   settingsBtn: $("settingsBtn"),
   status: $("connectionStatus"),
+  appVersion: $("appVersion"),
   workflowOverlay: $("workflowOverlay"),
   workflowForm: $("workflowForm"),
   workflowTitle: $("workflowTitle"),
@@ -126,16 +127,19 @@ function sanitizeAnswer(text) {
 
   for (const line of cleaned.split(/\r?\n/)) {
     const heading = line.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/);
+    const boldHeading = line.match(/^\s*\*\*(.+?)\*\*\s*:??\s*$/);
+    const headingText = heading?.[1] || boldHeading?.[1] || null;
+    const isHeading = Boolean(heading || boldHeading);
     if (skipLimitations) {
-      if (!heading) continue;
+      if (!isHeading) continue;
       skipLimitations = false;
     }
-    if (heading && /^data limitations\b/i.test(heading[1])) {
+    if (headingText && /^data limitations?\b/i.test(headingText)) {
       skipLimitations = true;
       continue;
     }
 
-    if (/^\s*(?:(?:[-*+]\s+|\d+[.)]\s+))?(?:\*\*)?(?:to (?:retrieve|assess|find|view|locate)\b|what you need(?: instead)?\b|how to find this information\b|via the dynatrace ui\b)/i.test(line)) {
+    if (/^\s*(?:(?:[-*+]\s+|\d+[.)]\s+))?(?:\*\*)?(?:to (?:retrieve|assess|find|view|locate)\b|what you need(?: instead)?\b|how to find this information\b|via the dynatrace ui\b|(?:go|navigate) to .*(?:dynatrace|users\s*&\s*sessions)|(?:open|review) .*(?:dynatrace|session viewer))/i.test(line)) {
       skipDirections = true;
       continue;
     }
@@ -559,6 +563,7 @@ els.testBtn.addEventListener("click", testConnection);
 
 (async function init() {
   settings = await api.getSettings();
+  els.appVersion.textContent = settings.version ? `v${settings.version}` : "";
   renderPromptBar();
   if (isConfigured()) {
     setStatus("unknown", "Configured");

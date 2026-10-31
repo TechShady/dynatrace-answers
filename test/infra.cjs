@@ -6,6 +6,9 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { spawn } = require("node:child_process");
 const infra = require("../src/infra");
+const healthChecks = require("../src/checks");
+const help = require("../src/help");
+const { verifyHelpUi } = require("./help.cjs");
 const root = path.resolve(__dirname, "..");
 const hosts = Array.from({ length: 12 }, (_, index) => ({ id: `HOST-${(index + 1).toString(16).toUpperCase()}`, name: `host-${String(index + 1).padStart(2, "0")}` }));
 
@@ -24,12 +27,18 @@ async function fixtureQuery(_creds, query) {
 function exposeFixture() {
   let settings = { tenantUrl: "https://example.apps.dynatrace.com", hasToken: true, dataMode: true, version: "test", buttons: {} };
   let lastRequest = null;
+  let guideDownloadMode = "success";
   const { contextBridge } = require("electron");
   contextBridge.exposeInMainWorld("answers", {
     getSettings: async () => settings,
     saveSettings: async (value) => (settings = { ...settings, ...value, hasToken: true }),
     getHosts: async () => hosts,
     getFrontends: async () => ["example frontend"],
+    getUserGuide: async () => help.readUserGuide(),
+    downloadUserGuide: async () => {
+      if (guideDownloadMode === "error") throw new Error("Destination unavailable");
+      return guideDownloadMode === "cancel" ? { canceled: true } : { canceled: false, filePath: "offline-user-guide.html" };
+    },
     onChatEvent: () => {},
     send: async (request) => {
       lastRequest = request;
@@ -37,7 +46,7 @@ function exposeFixture() {
       return { ...data, text: "Synthetic infrastructure analysis." };
     },
   });
-  contextBridge.exposeInMainWorld("fixture", { getLastRequest: () => lastRequest });
+  contextBridge.exposeInMainWorld("fixture", { getLastRequest: () => lastRequest, setGuideDownloadMode: (mode) => { guideDownloadMode = mode; } });
 }
 
 async function checkUi() {
@@ -59,7 +68,7 @@ async function checkUi() {
   await waitFor(() => chip());
   document.getElementById("settingsBtn").click();
   const switches = document.querySelectorAll("#buttonSettings input");
-  check(switches.length === 8, "Every health button must have a switch");
+  check(switches.length === 20, "Every health button must have a switch");
   document.querySelector('[data-action="infra-health"]').checked = false;
   document.getElementById("saveSettingsBtn").click();
   await waitFor(() => !chip());
@@ -111,6 +120,7 @@ async function runUiWorker() {
   const window = new BrowserWindow({ show: false, width: 1100, height: 850, webPreferences: { preload: __filename, sandbox: false, contextIsolation: true, nodeIntegration: false } });
   try {
     await window.loadFile(path.join(root, "src/renderer/index.html"));
+    console.log(`PASS: Help UI - ${await window.webContents.executeJavaScript(`(${verifyHelpUi.toString()})()`)}`);
     console.log(`PASS: Electron UI - ${await window.webContents.executeJavaScript(`(${checkUi.toString()})()`)}`);
     window.setSize(520, 800);
     assert.equal(await window.webContents.executeJavaScript("document.documentElement.scrollWidth <= window.innerWidth"), true);
@@ -121,13 +131,14 @@ async function runUiWorker() {
 async function verifyInfra() {
   for (const file of ["src/main.js", "src/preload.js", "src/renderer/app.js", "src/infra.js"]) new vm.Script(fs.readFileSync(path.join(root, file), "utf8"));
   const source = fs.readFileSync(path.join(root, "src/main.js"), "utf8");
-  const settingsContext = vm.createContext({ FRONTEND_WORKFLOWS: { "website-health": {}, "system-health": {} } });
+  const settingsContext = vm.createContext({ FRONTEND_WORKFLOWS: { "website-health": {}, "system-health": {} }, healthChecks });
   vm.runInContext(source.slice(source.indexOf("function normalizeButtons("), source.indexOf("function writeSettings(")), settingsContext);
   assert.equal(settingsContext.normalizeButtons()["website-health"], true);
   assert.equal(settingsContext.normalizeButtons({ "website-health": false })["website-health"], false);
   assert.equal(settingsContext.normalizeButtons({})["infra-health"], true);
   let stored = JSON.stringify({ tenantUrl: "https://example.apps.dynatrace.com", tokenEnc: "encrypted", dataMode: false });
   const persistenceContext = vm.createContext({
+    healthChecks,
     FRONTEND_WORKFLOWS: { "website-health": {}, "system-health": {} },
     app: { getPath: () => root, getVersion: () => "test" },
     path,

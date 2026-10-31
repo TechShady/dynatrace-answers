@@ -1,7 +1,7 @@
 {
   "name": "dynatrace-answers",
   "productName": "Dynatrace Answers",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Operational insights for every team, powered by Dynatrace Intelligence",
   "main": "src/main.js",
   "author": "Dynatrace Answers",
@@ -9,7 +9,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node test/infra.cjs && node test/formatting.cjs",
+    "test": "node test/help.cjs && node test/checks.cjs && node test/infra.cjs && node test/formatting.cjs",
     "dist": "electron-builder --win nsis --publish never"
   },
   "build": {
@@ -49,6 +49,7 @@
     "pdfjs-dist": "^6.4.299"
   },
   "dependencies": {
+    "lucide-static": "^1.66.0",
     "markdown-it": "^15.0.3",
     "sanitize-html": "^2.18.1"
   }

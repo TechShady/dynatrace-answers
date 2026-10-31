@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("answers", {
   testConnection: (settings) => ipcRenderer.invoke("connection:test", settings),
   getFrontends: () => ipcRenderer.invoke("frontends:list"),
   getHosts: () => ipcRenderer.invoke("hosts:list"),
+  getUserGuide: () => ipcRenderer.invoke("help:guide"),
+  downloadUserGuide: () => ipcRenderer.invoke("help:download-guide"),
   send: (request) => ipcRenderer.invoke("chat:send", request),
   exportPdf: (request) => ipcRenderer.invoke("chat:export-pdf", request),
   onChatEvent: (callback) => {

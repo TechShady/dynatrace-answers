@@ -5,6 +5,8 @@ const path = require("node:path");
 const fs = require("node:fs");
 const sanitizeHtml = require("sanitize-html");
 const { HOST_LIST_DQL, resolveHosts, queryInfraHealth } = require("./infra");
+const healthChecks = require("./checks");
+const { readUserGuide, buildUserGuideHtml } = require("./help");
 
 const SKILLS_PATH = "/platform/davis/copilot/v1/skills";
 const QUERY_PATH = "/platform/storage/query/v1";
@@ -113,6 +115,7 @@ function loadSettings() {
       tokenEnc: typeof raw.tokenEnc === "string" ? raw.tokenEnc : "",
       dataMode: raw.dataMode !== false,
       buttons: normalizeButtons(raw.buttons),
+      definitions: raw.definitions || { applications: [], transactions: [] },
     };
   } catch {
     return { tenantUrl: "", tokenEnc: "", dataMode: true, buttons: normalizeButtons() };
@@ -120,7 +123,7 @@ function loadSettings() {
 }
 
 function normalizeButtons(input) {
-  return Object.fromEntries([...Object.keys(FRONTEND_WORKFLOWS), "infra-health"].map((id) => [id, input?.[id] !== false]));
+  return Object.fromEntries([...Object.keys(FRONTEND_WORKFLOWS), "infra-health", ...healthChecks.OPERATIONAL_ACTIONS.map((action) => action.id)].map((id) => [id, input?.[id] !== false]));
 }
 
 function writeSettings(settings) {
@@ -134,6 +137,7 @@ function publicSettings(settings) {
     hasToken: Boolean(settings.tokenEnc),
     dataMode: settings.dataMode,
     buttons: normalizeButtons(settings.buttons),
+    definitions: settings.definitions || { applications: [], transactions: [] },
     version: app.getVersion(),
   };
 }
@@ -600,6 +604,8 @@ function sessionCountQuery(question) {
 
 function resolveFrontendWorkflow(input) {
   if (!input) return null;
+  const operational = healthChecks.resolveOperationalWorkflow(input, loadSettings().definitions);
+  if (operational) return operational;
   if (input.id === "infra-health") {
     const value = resolveHosts(input.value ?? []);
     return {
@@ -855,6 +861,13 @@ async function querySessionHealth(creds, question, workflow, emit) {
 
 async function queryEnvironment(creds, question, emit, workflow) {
   if (workflow?.id === "infra-health") return queryInfraHealth(creds, workflow, runDql, emit);
+  if (healthChecks.OPERATIONAL_ACTIONS.some((action) => action.id === workflow?.id)) {
+    return healthChecks.queryOperationalHealth(creds, workflow, runDql, emit, {
+      definitions: loadSettings().definitions,
+      frontendQuery: FRONTEND_HEALTH_METRICS_DQL,
+      summarizeFrontend: summarizeFrontendMetricTrend,
+    });
+  }
   let dql = "";
   const sessionQuestion = /\bsessions?\b/i.test(question);
   const frontendQuestion = /frontend|website|ibanking|rum|apdex|web\s+app/i.test(question);
@@ -1085,6 +1098,20 @@ async function queryEnvironment(creds, question, emit, workflow) {
 function registerIpc() {
   ipcMain.handle("settings:get", () => publicSettings(loadSettings()));
 
+  ipcMain.handle("help:guide", () => readUserGuide());
+
+  ipcMain.handle("help:download-guide", async () => {
+    const html = buildUserGuideHtml(readUserGuide(), app.getVersion());
+    const saveResult = await dialog.showSaveDialog(mainWindow, {
+      title: "Download User Guide",
+      defaultPath: path.join(app.getPath("downloads"), "Dynatrace-Answers-User-Guide.html"),
+      filters: [{ name: "Offline HTML user guide", extensions: ["html"] }],
+    });
+    if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
+    fs.writeFileSync(saveResult.filePath, html, "utf8");
+    return { canceled: false, filePath: saveResult.filePath };
+  });
+
   ipcMain.handle("settings:save", (_event, input) => {
     const current = loadSettings();
     const token = String(input?.token || "").trim();
@@ -1093,6 +1120,7 @@ function registerIpc() {
       tokenEnc: token ? encryptToken(token) : current.tokenEnc,
       dataMode: input?.dataMode !== false,
       buttons: normalizeButtons(input?.buttons ?? current.buttons),
+      definitions: healthChecks.normalizeDefinitions(input?.definitions ?? current.definitions),
     };
     writeSettings(next);
     return publicSettings(next);
@@ -1138,7 +1166,7 @@ function registerIpc() {
         { type: "supplementary", value: data.supplementary },
         { type: "instruction", value: workflow?.id === "infra-health"
           ? "You are Dynatrace Answers. Assess only host CPU and memory using the supplied structured evidence. State the time window, percent units, severity, coverage, missing telemetry, and query failures. Distinguish peaks from sustained load and correlation from cause. Do not invent process-level causes or claim overall infrastructure health. Never include DQL, URLs, links, or instructions to use the Dynatrace UI or contact an administrator."
-          : DATA_MODE_INSTRUCTION },
+          : data.operationalReport ? healthChecks.OPERATIONAL_INSTRUCTION : DATA_MODE_INSTRUCTION },
         { type: "document-retrieval", value: "dynatrace" },
       ];
       emit({ type: "progress", message: "Analyzing results..." });
@@ -1168,7 +1196,7 @@ function registerIpc() {
       }
       );
     } catch (error) {
-      if (!data?.infraReport) throw error;
+      if (!data?.infraReport && !data?.operationalReport) throw error;
       answer = { text: `Additional AI analysis unavailable: ${error.message}` };
     }
     return {
@@ -1176,6 +1204,7 @@ function registerIpc() {
       sources: [],
       ...(data?.sessionReport ? { sessionReport: data.sessionReport } : {}),
       ...(data?.infraReport ? { infraReport: data.infraReport } : {}),
+      ...(data?.operationalReport ? { operationalReport: data.operationalReport } : {}),
     };
   });
 

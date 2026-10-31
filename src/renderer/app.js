@@ -13,6 +13,13 @@ const els = {
   newChatBtn: $("newChatBtn"),
   exportPdfBtn: $("exportPdfBtn"),
   settingsBtn: $("settingsBtn"),
+  helpBtn: $("helpBtn"),
+  helpOverlay: $("helpOverlay"),
+  helpContent: $("helpContent"),
+  helpTopics: $("helpTopics"),
+  closeHelpBtn: $("closeHelpBtn"),
+  downloadUserGuideBtn: $("downloadUserGuideBtn"),
+  guideDownloadStatus: $("guideDownloadStatus"),
   status: $("connectionStatus"),
   appVersion: $("appVersion"),
   workflowOverlay: $("workflowOverlay"),
@@ -54,16 +61,24 @@ let activeFrontendIndex = -1;
 let hostNames = [];
 let selectedHosts = new Map();
 let hostLoadId = 0;
+let activeCategory = "Overview";
+let helpReturnFocus = null;
+let guideLoaded = false;
+let guideLoading = false;
+let tooltipButton = null;
+let tooltipOriginalTitle = null;
+let tooltipOriginalDescription = null;
 
 const FRONTEND_ACTIONS = [
-  { id: "infra-health", label: "Infra Health", inputLabel: "Hosts", placeholder: "Search hosts..." },
+  { id: "infra-health", label: "Infra Health", category: "Infrastructure", inputLabel: "Hosts", placeholder: "Search hosts..." },
   { id: "website-health", label: "Website health", inputLabel: "Frontend application", placeholder: "Application name" },
-  { id: "system-health", label: "System health" },
-  { id: "guided-triage", label: "Guided triage", inputLabel: "Reported symptom", placeholder: "What did the caller report?" },
-  { id: "session-health", label: "Session health", inputLabel: "User identifier or tag (optional)", placeholder: "e.g. maria", requiresConsent: true },
+  { id: "system-health", label: "All websites health" },
+  { id: "guided-triage", label: "Guided triage", category: "Investigate", inputLabel: "Reported symptom", placeholder: "What did the caller report?" },
+  { id: "session-health", label: "Session health", category: "Investigate", inputLabel: "User identifier or tag (optional)", placeholder: "e.g. maria", requiresConsent: true },
   {
     id: "impact-scope",
     label: "Impact scope",
+    category: "Investigate",
     inputLabel: "Reported symptom",
     options: [
       "Slow page load",
@@ -78,7 +93,10 @@ const FRONTEND_ACTIONS = [
   },
   { id: "frontend-errors", label: "Frontend errors" },
   { id: "slow-pages", label: "Slow pages" },
+  ...window.healthChecks.OPERATIONAL_ACTIONS,
 ];
+
+const OVERVIEW_ACTIONS = ["overall-health", "active-incidents", "website-health", "backend-health", "database-health", "infra-health", "guided-triage", "application-health"];
 
 function setStatus(kind, text) {
   els.status.className = `status status-${kind}`;
@@ -387,10 +405,99 @@ function renderInfraReport(container, report) {
   container.appendChild(section);
 }
 
+function renderOperationalReport(container, report) {
+  const section = document.createElement("section");
+  section.className = "session-report operational-report";
+  const heading = document.createElement("h3");
+  heading.textContent = report.title;
+  const status = document.createElement("p");
+  status.className = `operational-status ${report.status === "Critical" ? "error-text" : report.status === "Needs attention" ? "warn-text" : ""}`;
+  status.textContent = `Status: ${report.status}${report.coverageIncomplete ? " (coverage incomplete)" : ""}`;
+  section.append(heading, status);
+  const overview = document.createElement("dl");
+  overview.className = "operational-overview";
+  const activeStarts = (report.problems || []).filter((problem) => problem["event.status"] === "ACTIVE")
+    .map((problem) => new Date(problem["event.start"]).getTime()).filter(Number.isFinite);
+  const fields = [
+    ["What's affected", report.scope],
+    ["Since when", activeStarts.length ? `Earliest recorded active incident: ${formatSessionTime(Math.min(...activeStarts))}` : "Onset not established from the collected evidence"],
+    ["Better or worse", report.trend],
+    ["Next action", report.nextAction],
+    ["Evidence coverage", `${report.sources.filter((source) => source.status === "Available").length}/${report.sources.length} sources returned records; ${report.window}. Checked ${formatSessionTime(report.generatedAt)}.`],
+  ];
+  fields.forEach(([label, value]) => {
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = label;
+    description.textContent = value;
+    overview.append(term, description);
+  });
+  section.appendChild(overview);
+  report.sections.forEach((item) => {
+    const details = document.createElement("details");
+    details.className = "evidence-section";
+    details.open = item.rows.length > 0 && item.rows.length <= 10;
+    const summary = document.createElement("summary");
+    summary.textContent = `${item.title} (${item.rows.length})`;
+    details.appendChild(summary);
+    if (item.rows.length) {
+      appendInfraTable(details, item.title, item.columns, item.rows.map((row) => row.map((value, index) => {
+        if (index === 0 && value && (item.title === "Recorded incidents" || item.title === "Backend services")) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "host-link";
+          button.textContent = value;
+          button.title = item.title === "Recorded incidents" ? "Summarize this incident" : "Check this service";
+          button.addEventListener("click", () => sendPrompt(button.title, { id: item.title === "Recorded incidents" ? "incident-summary" : "backend-health", value }, `${button.title}: ${value}`));
+          return button;
+        }
+        return typeof value === "number" ? Number.isFinite(value) ? String(Math.round(value * 100) / 100) : "Unknown" : value == null || value === "" ? "Unknown" : String(value);
+      })));
+    } else {
+      const empty = document.createElement("p");
+      empty.textContent = "No matching evidence returned. This does not establish healthy operation.";
+      details.appendChild(empty);
+    }
+    section.appendChild(details);
+  });
+  const coverage = document.createElement("details");
+  coverage.className = "evidence-section";
+  const coverageTitle = document.createElement("summary");
+  coverageTitle.textContent = "Coverage and assessment rules";
+  coverage.appendChild(coverageTitle);
+  report.notes.forEach((note) => {
+    const paragraph = document.createElement("p");
+    paragraph.textContent = note;
+    coverage.appendChild(paragraph);
+  });
+  report.sources.forEach((source) => {
+    const paragraph = document.createElement("p");
+    paragraph.className = source.status === "Unknown" || source.capped ? "warn-text" : "muted";
+    paragraph.textContent = `${source.label}: ${source.status}${source.error ? ` - ${source.error}` : ""}${source.capped ? " - result cap reached; coverage incomplete" : ""}.`;
+    coverage.appendChild(paragraph);
+  });
+  section.appendChild(coverage);
+  const followups = document.createElement("div");
+  followups.className = "report-actions";
+  ["is-it-recovering", "what-changed", "incident-summary"].filter((id) => id !== report.id && settings.buttons?.[id] !== false).forEach((id) => {
+    const action = FRONTEND_ACTIONS.find((item) => item.id === id);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn-ghost";
+    button.textContent = action.label;
+    button.dataset.tooltip = window.answersHelp.BUTTON_HELP[id];
+    button.addEventListener("click", () => sendPrompt(action.label, { id, value: report.scope === "Monitored environment" ? "" : report.scope }, `${action.label}: ${report.scope}`));
+    followups.appendChild(button);
+  });
+  section.appendChild(followups);
+  container.appendChild(section);
+}
+
 function renderAnswer(div, result) {
   div.innerHTML = "";
-  if (result.sessionReport || result.infraReport) {
-    if (result.infraReport) renderInfraReport(div, result.infraReport);
+  if (result.sessionReport || result.infraReport || result.operationalReport) {
+    if (result.operationalReport) renderOperationalReport(div, result.operationalReport);
+    else if (result.infraReport) renderInfraReport(div, result.infraReport);
     else renderSessionReport(div, result.sessionReport);
     const additional = document.createElement("details");
     additional.className = "assistant-commentary";
@@ -469,15 +576,52 @@ api.onChatEvent((evt) => {
 
 function renderPromptBar() {
   els.promptBar.innerHTML = "";
-  FRONTEND_ACTIONS.filter((action) => settings.buttons?.[action.id] !== false).forEach((action) => {
+  const enabled = FRONTEND_ACTIONS.filter((action) => settings.buttons?.[action.id] !== false);
+  const categories = ["Overview", "Frontend", "Backend", "Infrastructure", "Investigate"].filter((category) => enabled.some((action) => category === "Overview" ? OVERVIEW_ACTIONS.includes(action.id) : (action.category || "Frontend") === category));
+  if (!categories.includes(activeCategory)) activeCategory = categories[0] || "Overview";
+  const tabs = document.createElement("div");
+  tabs.className = "check-tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Health check categories");
+  categories.forEach((category, index) => {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.id = `check-tab-${category}`;
+    tab.className = "check-tab";
+    tab.textContent = category;
+    tab.dataset.tooltip = `Show ${category.toLowerCase()} checks. Choose a check to collect its specific evidence.`;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(category === activeCategory));
+    tab.setAttribute("aria-controls", "checkPanel");
+    tab.tabIndex = category === activeCategory ? 0 : -1;
+    tab.disabled = busy;
+    const select = (next) => { activeCategory = next; renderPromptBar(); document.getElementById(`check-tab-${next}`)?.focus(); };
+    tab.addEventListener("click", () => select(category));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? 0 : event.key === "End" ? categories.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + categories.length) % categories.length;
+      select(categories[next]);
+    });
+    tabs.appendChild(tab);
+  });
+  const panel = document.createElement("div");
+  panel.id = "checkPanel";
+  panel.className = "check-panel";
+  panel.setAttribute("role", "tabpanel");
+  panel.setAttribute("aria-labelledby", `check-tab-${activeCategory}`);
+  const actions = activeCategory === "Overview" ? OVERVIEW_ACTIONS.map((id) => enabled.find((action) => action.id === id)).filter(Boolean) : enabled.filter((action) => (action.category || "Frontend") === activeCategory);
+  actions.forEach((action) => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "chip";
     btn.textContent = action.label;
+    btn.dataset.tooltip = window.answersHelp.BUTTON_HELP[action.id];
     btn.disabled = busy;
     btn.addEventListener("click", () => startWorkflow(action));
-    els.promptBar.appendChild(btn);
+    panel.appendChild(btn);
   });
+  els.promptBar.append(tabs, panel);
 }
 
 function startWorkflow(action) {
@@ -489,7 +633,9 @@ function startWorkflow(action) {
   els.workflowTitle.textContent = action.label;
   els.workflowLabel.textContent = action.inputLabel;
   const isFrontendPicker = action.id === "website-health";
-  const hasOptions = Array.isArray(action.options);
+  const definitionOptions = action.definitionType ? (settings.definitions?.[action.definitionType] || []).map((item) => item.name) : null;
+  const options = definitionOptions || action.options;
+  const hasOptions = Array.isArray(options);
   const requiresConsent = Boolean(action.requiresConsent);
   const isSessionHealth = action.id === "session-health";
   const isHostPicker = action.id === "infra-health";
@@ -504,24 +650,28 @@ function startWorkflow(action) {
   els.sessionConsent.checked = false;
   els.workflowSelect.classList.toggle("hidden", !hasOptions);
   els.workflowInput.classList.toggle("hidden", hasOptions);
-  els.workflowInput.required = !hasOptions && !isSessionHealth && !isHostPicker;
+  els.workflowInput.required = !hasOptions && !isSessionHealth && !isHostPicker && !action.optionalInput;
+  els.workflowInput.disabled = false;
   els.workflowSelect.required = hasOptions;
   els.sessionIdInput.required = false;
   els.workflowSelect.innerHTML = "";
   if (hasOptions) {
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = "Select a symptom...";
+    placeholder.textContent = action.definitionType ? `Select ${action.definitionType === "applications" ? "an application" : "a transaction"}...` : "Select a symptom...";
     placeholder.disabled = true;
     placeholder.selected = true;
     els.workflowSelect.appendChild(placeholder);
-    action.options.forEach((value) => {
+    options.forEach((value) => {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = value;
       els.workflowSelect.appendChild(option);
     });
   }
+  const notice = $("workflowNotice");
+  notice.textContent = action.definitionType && !options.length ? `No ${action.definitionType} configured. Add definitions in Settings.` : "";
+  notice.classList.toggle("hidden", !notice.textContent);
   els.workflowInput.placeholder = isFrontendPicker ? "Search frontends..." : action.placeholder || "";
   els.workflowInput.setAttribute("aria-label", action.inputLabel);
   if (isFrontendPicker) {
@@ -726,8 +876,160 @@ function openSettings() {
     label.append(checkbox, text);
     buttonSettings.appendChild(label);
   });
+  for (const type of ["applications", "transactions"]) {
+    $(type === "applications" ? "applicationDefinitions" : "transactionDefinitions").replaceChildren();
+    (settings.definitions?.[type] || []).forEach((definition) => addDefinitionRow(type, definition));
+  }
   els.overlay.classList.remove("hidden");
   els.tenantUrl.focus();
+}
+
+function addDefinitionRow(type, definition = {}) {
+  const container = $(type === "applications" ? "applicationDefinitions" : "transactionDefinitions");
+  if (container.children.length >= 50) return;
+  const row = document.createElement("div");
+  row.className = "definition-row";
+  const fields = type === "applications" ? [["name", "Application name"], ["frontend", "Exact frontend name"], ["service", "Exact entry service name"]]
+    : [["name", "Transaction name"], ["service", "Exact service name"], ["endpoint", "Exact endpoint name"]];
+  fields.forEach(([field, title]) => {
+    const label = document.createElement("label");
+    label.className = "field";
+    const text = document.createElement("span");
+    text.textContent = title;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.dataset.field = field;
+    input.maxLength = field === "name" ? 200 : 500;
+    input.value = definition[field] || "";
+    label.append(text, input);
+    row.appendChild(label);
+  });
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "btn btn-ghost definition-remove";
+  remove.textContent = "-";
+  remove.title = "Remove definition";
+  remove.setAttribute("aria-label", "Remove definition");
+  remove.addEventListener("click", () => row.remove());
+  row.appendChild(remove);
+  container.appendChild(row);
+}
+
+function collectDefinitions() {
+  return Object.fromEntries([["applications", "applicationDefinitions"], ["transactions", "transactionDefinitions"]].map(([type, id]) => [type,
+    [...$(id).querySelectorAll(".definition-row")].map((row) => Object.fromEntries([...row.querySelectorAll("input")].map((input) => [input.dataset.field, input.value.trim()])))
+      .filter((definition) => Object.values(definition).some(Boolean)),
+  ]));
+}
+
+function hideButtonTooltip() {
+  $("buttonTooltip").classList.add("hidden");
+  if (tooltipButton) {
+    if (tooltipOriginalTitle !== null) tooltipButton.setAttribute("title", tooltipOriginalTitle);
+    if (tooltipOriginalDescription === null) tooltipButton.removeAttribute("aria-describedby");
+    else tooltipButton.setAttribute("aria-describedby", tooltipOriginalDescription);
+  }
+  tooltipButton = null;
+  tooltipOriginalTitle = null;
+  tooltipOriginalDescription = null;
+}
+
+function showButtonTooltip(button) {
+  if (button === tooltipButton) return;
+  hideButtonTooltip();
+  const description = button?.dataset.tooltip || button?.getAttribute("title");
+  if (!description) return;
+  const tooltip = $("buttonTooltip");
+  tooltipButton = button;
+  tooltipOriginalTitle = button.getAttribute("title");
+  tooltipOriginalDescription = button.getAttribute("aria-describedby");
+  button.removeAttribute("title");
+  button.setAttribute("aria-describedby", [tooltipOriginalDescription, "buttonTooltip"].filter(Boolean).join(" "));
+  tooltip.textContent = description;
+  tooltip.classList.remove("hidden");
+  const bounds = button.getBoundingClientRect();
+  const size = tooltip.getBoundingClientRect();
+  const left = Math.max(12, Math.min(bounds.left + bounds.width / 2 - size.width / 2, window.innerWidth - size.width - 12));
+  const below = bounds.bottom + 8;
+  const top = below + size.height <= window.innerHeight - 12 ? below : Math.max(12, bounds.top - size.height - 8);
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function installButtonTooltips() {
+  Object.entries(window.answersHelp.CONTROL_HELP).forEach(([id, description]) => {
+    if ($(id)) $(id).dataset.tooltip = description;
+  });
+  document.addEventListener("pointerover", (event) => {
+    const button = event.target.closest("button");
+    if (button) showButtonTooltip(button);
+  });
+  document.addEventListener("pointerout", (event) => {
+    if (tooltipButton && !tooltipButton.contains(event.relatedTarget)) hideButtonTooltip();
+  });
+  document.addEventListener("focusin", (event) => {
+    const button = event.target.closest("button");
+    if (button) showButtonTooltip(button);
+  });
+  document.addEventListener("focusout", hideButtonTooltip);
+  document.addEventListener("click", hideButtonTooltip, true);
+  document.addEventListener("scroll", hideButtonTooltip, true);
+  window.addEventListener("resize", hideButtonTooltip);
+}
+
+async function openHelp() {
+  hideButtonTooltip();
+  helpReturnFocus = document.activeElement;
+  els.helpOverlay.classList.remove("hidden");
+  els.closeHelpBtn.focus();
+  if (guideLoaded || guideLoading) return;
+  guideLoading = true;
+  els.helpContent.textContent = "Loading user guide...";
+  try {
+    const markdown = await api.getUserGuide();
+    els.helpContent.innerHTML = window.renderMarkdown(markdown);
+    const topics = [...els.helpContent.querySelectorAll("h2")];
+    els.helpTopics.replaceChildren();
+    topics.forEach((heading, index) => {
+      heading.id = `guide-topic-${index}`;
+      heading.tabIndex = -1;
+      const option = document.createElement("option");
+      option.value = heading.id;
+      option.textContent = heading.textContent;
+      els.helpTopics.appendChild(option);
+    });
+    els.helpTopics.disabled = !topics.length;
+    guideLoaded = true;
+  } catch (error) {
+    els.helpContent.textContent = `The user guide could not be loaded: ${cleanError(error)}. Close and reopen Help to retry.`;
+    els.helpTopics.replaceChildren(new Option("Guide unavailable", ""));
+    els.helpTopics.disabled = true;
+  } finally {
+    guideLoading = false;
+  }
+}
+
+function closeHelp() {
+  hideButtonTooltip();
+  els.helpOverlay.classList.add("hidden");
+  if (helpReturnFocus?.isConnected) helpReturnFocus.focus();
+  else els.helpBtn.focus();
+}
+
+async function downloadUserGuide() {
+  els.downloadUserGuideBtn.disabled = true;
+  els.guideDownloadStatus.className = "muted";
+  els.guideDownloadStatus.textContent = "Preparing offline user guide...";
+  try {
+    const result = await api.downloadUserGuide();
+    els.guideDownloadStatus.className = result.canceled ? "muted" : "ok-text";
+    els.guideDownloadStatus.textContent = result.canceled ? "Download canceled." : `User guide saved: ${result.filePath}`;
+  } catch (error) {
+    els.guideDownloadStatus.className = "error-text";
+    els.guideDownloadStatus.textContent = `User guide download failed: ${cleanError(error)}`;
+  } finally {
+    els.downloadUserGuideBtn.disabled = false;
+  }
 }
 
 function closeSettings() {
@@ -743,8 +1045,8 @@ async function testConnection() {
     if (r.chatAvailable) {
       els.testResult.className = "ok-text";
       els.testResult.textContent = r.nl2dqlAvailable
-        ? "Connected. Frontend checks can query errors and page performance."
-        : "Connected. Frontend health checks can query metrics; free-text data questions need DQL generation.";
+        ? "Connected. Data access for each check depends on the token's permissions."
+        : "Connected. Health checks use dedicated queries; free-text data questions need DQL generation.";
     } else {
       els.testResult.className = "error-text";
       els.testResult.textContent = `Connected, but chat is not available for this token. Skills: ${r.skills.join(", ") || "none"}. Check the davis-copilot:conversations:execute scope.`;
@@ -772,6 +1074,7 @@ async function saveSettings() {
         token: els.token.value,
         dataMode: els.dataMode.checked,
         buttons: Object.fromEntries([...$("buttonSettings").querySelectorAll("input")].map((input) => [input.dataset.action, input.checked])),
+        definitions: window.healthChecks.normalizeDefinitions(collectDefinitions()),
       })),
     };
     if (tenantChanged) newChat();
@@ -805,6 +1108,20 @@ els.input.addEventListener("input", () => {
 });
 
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") hideButtonTooltip();
+  if (!els.helpOverlay.classList.contains("hidden")) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeHelp();
+    } else if (e.key === "Tab") {
+      const focusable = [...els.helpOverlay.querySelectorAll("button:not(:disabled), select:not(:disabled), [tabindex='0']")];
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (e.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !focusable.includes(document.activeElement))) { e.preventDefault(); first.focus(); }
+    }
+    return;
+  }
   if (e.key === "Escape" && !els.overlay.classList.contains("hidden")) closeSettings();
   if (e.key === "Escape" && !els.workflowOverlay.classList.contains("hidden")) closeWorkflow();
 });
@@ -812,6 +1129,16 @@ document.addEventListener("keydown", (e) => {
 els.newChatBtn.addEventListener("click", newChat);
 els.exportPdfBtn.addEventListener("click", exportChatPdf);
 els.settingsBtn.addEventListener("click", openSettings);
+els.helpBtn.addEventListener("click", openHelp);
+els.closeHelpBtn.addEventListener("click", closeHelp);
+els.downloadUserGuideBtn.addEventListener("click", downloadUserGuide);
+els.helpTopics.addEventListener("change", () => {
+  const heading = $(els.helpTopics.value);
+  if (heading) {
+    heading.scrollIntoView({ block: "start" });
+    heading.focus({ preventScroll: true });
+  }
+});
 els.closeBtn.addEventListener("click", closeSettings);
 $("cancelWorkflowBtn").addEventListener("click", closeWorkflow);
 els.workflowForm.addEventListener("submit", (e) => {
@@ -833,9 +1160,9 @@ els.workflowForm.addEventListener("submit", (e) => {
     };
     if (!value.userIdentifier && !value.sessionId) return;
   } else {
-    value = action?.options ? els.workflowSelect.value : els.workflowInput.value.trim();
+    value = action?.options || action?.definitionType ? els.workflowSelect.value : els.workflowInput.value.trim();
   }
-  if (!action || !value || (typeof value === "object" && !value.userIdentifier && !value.sessionId)) return;
+  if (!action || (!value && !action.optionalInput) || (typeof value === "object" && !value.userIdentifier && !value.sessionId)) return;
   closeWorkflow();
   sendPrompt(action.label, {
     id: action.id,
@@ -843,7 +1170,7 @@ els.workflowForm.addEventListener("submit", (e) => {
     ...(action.requiresConsent ? { consent: els.sessionConsent.checked } : {}),
   }, action.id === "session-health"
     ? `${action.label}: ${value.userIdentifier || "no user identifier"}; ${value.sessionId}`
-    : `${action.label}: ${value}`);
+    : `${action.label}: ${value || "Monitored environment"}`);
 });
 els.workflowInput.addEventListener("input", () => {
   if (activeWorkflow?.id === "infra-health") {
@@ -895,8 +1222,11 @@ $("allHosts").addEventListener("change", () => {
 });
 els.saveBtn.addEventListener("click", saveSettings);
 els.testBtn.addEventListener("click", testConnection);
+$("addApplicationBtn").addEventListener("click", () => addDefinitionRow("applications"));
+$("addTransactionBtn").addEventListener("click", () => addDefinitionRow("transactions"));
 
 (async function init() {
+  installButtonTooltips();
   settings = await api.getSettings();
   els.appVersion.textContent = settings.version ? `v${settings.version}` : "";
   renderPromptBar();

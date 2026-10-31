@@ -140,6 +140,44 @@ body {
   background: transparent;
 }
 
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.button-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  filter: invert(1);
+}
+
+.button-tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(340px, calc(100vw - 24px));
+  padding: 9px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .chat-layout {
   flex: 1;
   display: flex;
@@ -293,9 +331,127 @@ body {
 
 .prompt-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.check-tabs,
+.check-panel,
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.check-tab {
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+
+.check-tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.check-tab:focus-visible,
+.chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.check-panel {
+  min-height: 64px;
+  align-content: flex-start;
+}
+
+.operational-status {
+  font-weight: 600;
+}
+
+.warn-text {
+  color: var(--warn);
+}
+
+.operational-overview {
+  display: grid;
+  grid-template-columns: minmax(100px, 130px) minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 12px 0;
+}
+
+.operational-overview dt {
+  font-weight: 600;
+}
+
+.operational-overview dd {
+  margin: 0;
+}
+
+.evidence-section {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.evidence-section summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.operational-report .infra-table td {
+  white-space: normal;
+  max-width: 280px;
+}
+
+.report-actions {
+  margin-top: 12px;
+}
+
+.definition-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 36px;
+  gap: 8px;
+  align-items: end;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.definition-row input {
+  min-width: 0;
+}
+
+.definition-remove {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 600px) {
+  .definition-row {
+    grid-template-columns: minmax(0, 1fr) 36px;
+  }
+  .definition-row .field {
+    grid-column: 1;
+  }
+  .definition-remove {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .operational-overview {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .operational-overview dd {
+    margin-bottom: 8px;
+  }
 }
 
 .chip {
@@ -304,7 +460,7 @@ body {
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 5px 14px;
   cursor: pointer;
 }
@@ -379,6 +535,95 @@ select:focus {
 
 .workflow-dialog {
   width: min(460px, 100%);
+}
+
+#helpOverlay {
+  z-index: 100;
+}
+
+.help-dialog {
+  width: min(960px, 100%);
+  height: min(860px, 100%);
+}
+
+.help-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.help-topic-field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+#downloadUserGuideBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+}
+
+.help-content {
+  flex: 1;
+  min-height: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+  padding-top: 16px;
+}
+
+.help-content h1 {
+  font-size: 24px;
+  line-height: 1.3;
+  margin: 0 0 16px;
+}
+
+.help-content h2 {
+  font-size: 19px;
+  margin-top: 30px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  scroll-margin-top: 16px;
+}
+
+.help-content h3 {
+  font-size: 16px;
+  margin-top: 22px;
+}
+
+.help-content .analysis-table-wrap table {
+  min-width: 540px;
+}
+
+.help-footer {
+  min-height: 48px;
+  justify-content: flex-start;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+@media (max-width: 600px) {
+  #helpOverlay {
+    padding: 12px;
+  }
+  .help-toolbar {
+    align-items: stretch;
+  }
+  .help-topic-field,
+  #downloadUserGuideBtn {
+    flex-basis: 100%;
+  }
+  #downloadUserGuideBtn {
+    justify-content: center;
+  }
 }
 
 .dialog-header,

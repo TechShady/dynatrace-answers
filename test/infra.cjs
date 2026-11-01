@@ -131,6 +131,46 @@ async function runUiWorker() {
 async function verifyInfra() {
   for (const file of ["src/main.js", "src/preload.js", "src/renderer/app.js", "src/infra.js"]) new vm.Script(fs.readFileSync(path.join(root, file), "utf8"));
   const source = fs.readFileSync(path.join(root, "src/main.js"), "utf8");
+  const manifest = require("../package.json");
+  const lock = require("../package-lock.json");
+  assert.deepEqual(manifest.build.mac.target[0].arch, ["arm64", "x64"]);
+  assert.equal(manifest.build.mac.identity, null);
+  assert.equal(manifest.build.mac.notarize, false);
+  assert.ok(manifest.build.mac.artifactName.includes("${arch}"));
+  assert.equal(manifest.version, lock.version);
+  assert.equal(manifest.version, lock.packages[""].version);
+  for (const platform of ["darwin", "win32"]) {
+    const handlers = new Map();
+    let quits = 0;
+    let windows = 0;
+    let menu;
+    const lifecycle = vm.createContext({
+      process: { platform },
+      app: {
+        requestSingleInstanceLock: () => true,
+        isReady: () => true,
+        on: (event, handler) => handlers.set(event, handler),
+        whenReady: () => ({ then: (callback) => callback() }),
+        quit: () => { quits++; },
+      },
+      Menu: { buildFromTemplate: (template) => template, setApplicationMenu: (value) => { menu = value; } },
+      mainWindow: null,
+      registerIpc: () => {},
+      createWindow: () => { windows++; lifecycle.mainWindow = {}; },
+    });
+    vm.runInContext(source.slice(source.indexOf("if (!app.requestSingleInstanceLock())")), lifecycle);
+    assert.equal(windows, 1);
+    if (platform === "darwin") assert.equal(menu[0].role, "appMenu");
+    else assert.equal(menu, null);
+    handlers.get("activate")();
+    assert.equal(windows, 1, "Dock activation must not create duplicate windows");
+    lifecycle.mainWindow = null;
+    handlers.get("window-all-closed")();
+    assert.equal(quits, platform === "darwin" ? 0 : 1);
+    handlers.get("activate")();
+    assert.equal(windows, 2, "Dock activation must reopen a closed window");
+  }
+  console.log("PASS: macOS/Windows lifecycle, native menu, architecture-specific unsigned DMGs and version consistency");
   const settingsContext = vm.createContext({ FRONTEND_WORKFLOWS: { "website-health": {}, "system-health": {} }, healthChecks });
   vm.runInContext(source.slice(source.indexOf("function normalizeButtons("), source.indexOf("function writeSettings(")), settingsContext);
   assert.equal(settingsContext.normalizeButtons()["website-health"], true);

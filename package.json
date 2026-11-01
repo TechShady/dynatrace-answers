@@ -1,7 +1,7 @@
 {
   "name": "dynatrace-answers",
   "productName": "Dynatrace Answers",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Operational insights for every team, powered by Dynatrace Intelligence",
   "main": "src/main.js",
   "author": "Dynatrace Answers",
@@ -10,7 +10,8 @@
   "scripts": {
     "start": "electron .",
     "test": "node test/help.cjs && node test/checks.cjs && node test/infra.cjs && node test/formatting.cjs",
-    "dist": "electron-builder --win nsis --publish never"
+    "dist": "electron-builder --win nsis --publish never",
+    "dist:mac": "electron-builder --mac dmg --publish never"
   },
   "build": {
     "appId": "com.dynatrace.answers",
@@ -31,6 +32,14 @@
           ]
         }
       ]
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+      "category": "public.app-category.business",
+      "identity": null,
+      "hardenedRuntime": false,
+      "notarize": false,
+      "artifactName": "Dynatrace-Answers-${version}-macOS-${arch}.${ext}"
     },
     "nsis": {
       "guid": "628d508c-a007-5629-97a0-e53910f02cfa",

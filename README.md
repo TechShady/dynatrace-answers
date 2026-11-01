@@ -2,13 +2,21 @@
 
 Operational insights for every team, powered by Dynatrace Intelligence.
 
-A Windows desktop application for help desk staff, executives, and other teams who need answers from Dynatrace without navigating its UI.
+A Windows and macOS desktop application for help desk staff, executives, and other teams who need answers from Dynatrace without navigating its UI.
 
 ## Install
 
-Download the Windows installer and SHA-256 checksum from the [latest release](https://github.com/TechShady/dynatrace-answers/releases/latest).
+Download the installer and SHA-256 checksum for your platform from the [latest release](https://github.com/TechShady/dynatrace-answers/releases/latest):
 
-The installer creates Dynatrace Answers desktop and Start menu shortcuts. Existing settings are copied into the renamed application's settings folder on first launch when no new settings exist. Platform tokens remain encrypted using the operating system's secure storage.
+- Windows: `Dynatrace-Answers-Setup-VERSION.exe`.
+- Mac with an Apple Silicon chip (M-series): `Dynatrace-Answers-VERSION-macOS-arm64.dmg`.
+- Mac with an Intel processor: `Dynatrace-Answers-VERSION-macOS-x64.dmg`.
+
+On macOS, check Apple menu > About This Mac to identify the chip or processor. Open the matching DMG, drag Dynatrace Answers to Applications, then eject the disk image and launch the installed app.
+
+**Unsigned macOS builds:** No Apple Developer account is configured, so these DMGs are unsigned and unnotarized. After verifying the source and checksum, macOS may require System Settings > Privacy & Security > Open Anyway following a blocked launch. Follow your organization's policies; managed Macs may forbid unnotarized applications. Do not disable Gatekeeper globally. Signing and notarization can be added later with an authorized Apple Developer identity.
+
+The Windows installer creates Dynatrace Answers desktop and Start menu shortcuts. Existing settings are copied into the renamed application's settings folder on first launch when no new settings exist. Platform tokens remain encrypted using the operating system's secure storage (Windows secure storage or macOS Keychain); credentials do not transfer between operating systems. On macOS, closing the window leaves the app running; reopen it from the Dock, or use Command-Q to quit.
 
 Configure the tenant and platform token in Settings. Query access depends on the token's permissions. Session analysis requires explicit consent before sharing identifiers and matching session data with Dynatrace Intelligence.
 
@@ -32,7 +40,7 @@ Infrastructure checks require `storage:metrics:read`, `storage:entities:read`, a
 
 ## Development
 
-Use Node.js 22.13 or later and Windows for installer builds.
+Use Node.js 22.13 or later. Build Windows installers on Windows and DMGs on macOS.
 
 ```sh
 npm ci
@@ -40,6 +48,8 @@ npm start
 npm test
 npm run dist
 ```
+
+On macOS, use `npm run dist:mac` for both DMG architectures, or `npm run dist:mac -- --arm64` / `npm run dist:mac -- --x64` for one architecture. GitHub Actions runs tests and native builds on Windows, Apple Silicon macOS, and Intel macOS, then publishes all installers and checksums together only when all platform jobs succeed.
 
 The infrastructure tests cover settings persistence, rankings, scoped queries, missing data, thresholds, and synthetic Electron picker/drill-down interactions. Run `node test/infra.cjs --unit-only` for backend checks without launching Electron. The formatting test generates a synthetic PDF in the ignored build directory and checks table rendering, safe HTML export, first-page content, repeated headers, and intact table rows. Tagged releases build the installer and publish its checksum through GitHub Actions.
 

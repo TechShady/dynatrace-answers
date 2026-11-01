@@ -1,4 +1,4 @@
-name: Release installer
+name: Release installers
 
 on:
   push:
@@ -34,9 +34,78 @@ jobs:
           $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -LiteralPath "$($installer.FullName).sha256" -Value $hash -NoNewline -Encoding ascii
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            dist/Dynatrace-Answers-Setup-*.exe
+            dist/Dynatrace-Answers-Setup-*.exe.sha256
+          if-no-files-found: error
+
+  build-mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
+
+      - run: npm run dist:mac -- --${{ matrix.arch }}
+
+      - name: Generate macOS installer checksum
+        shell: bash
+        run: |
+          shopt -s nullglob
+          installers=(dist/Dynatrace-Answers-*-macOS-${{ matrix.arch }}.dmg)
+          if [ "${#installers[@]}" -ne 1 ]; then
+            echo "Expected exactly one macOS installer for ${{ matrix.arch }}."
+            exit 1
+          fi
+          shasum -a 256 "${installers[0]}" | awk '{print $1}' > "${installers[0]}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer-${{ matrix.arch }}
+          path: |
+            dist/Dynatrace-Answers-*-macOS-${{ matrix.arch }}.dmg
+            dist/Dynatrace-Answers-*-macOS-${{ matrix.arch }}.dmg.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [build, build-mac]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
             dist/Dynatrace-Answers-Setup-*.exe
             dist/Dynatrace-Answers-Setup-*.exe.sha256
+            dist/Dynatrace-Answers-*-macOS-*.dmg
+            dist/Dynatrace-Answers-*-macOS-*.dmg.sha256
+          fail_on_unmatched_files: true
+          body: |
+            Windows and separate macOS installers for Apple Silicon (arm64) and Intel (x64).
+
+            macOS builds are unsigned and unnotarized. Open the DMG, drag Dynatrace Answers to Applications, then eject the disk image. macOS may block the first launch; after verifying the download, use System Settings > Privacy & Security > Open Anyway if permitted by your organization. No paid Apple Developer account is required to download this unsigned build. Managed devices may prohibit unnotarized apps.

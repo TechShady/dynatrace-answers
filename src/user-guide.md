@@ -4,7 +4,7 @@ For help desk staff, business leaders, application owners, and other teams who n
 
 ## 1. What This App Does
 
-Dynatrace Answers is a Windows desktop application that reads monitoring data from your organization's Dynatrace environment and presents operational findings in a conversation. Health-check buttons collect specific evidence without requiring you to write queries or navigate Dynatrace. You can also ask questions in your own words.
+Dynatrace Answers is a Windows and macOS desktop application that reads monitoring data from your organization's Dynatrace environment and presents operational findings in a conversation. Health-check buttons collect specific evidence without requiring you to write queries or navigate Dynatrace. You can also ask questions in your own words.
 
 Use the app to establish what the available evidence shows, which resources might need attention, and what to include in a handoff. It is not a replacement for your organization's incident-management process or the judgment of the team responsible for an application.
 
@@ -27,8 +27,8 @@ The app reads monitoring data. It does not restart services, modify infrastructu
 
 ### Installation and connection
 
-1. Install the Windows application using your organization's approved installer.
-2. Open Dynatrace Answers from its desktop or Start menu shortcut.
+1. Install the application using your organization's approved Windows installer or the correct macOS disk image.
+2. Open Dynatrace Answers from its Windows desktop/Start menu shortcut or the macOS Applications folder.
 3. Open **Settings** in the top-right corner.
 4. Enter the **Tenant URL**, identifying the Dynatrace environment you are authorized to investigate.
 5. Enter an authorized **Platform token**. This is a sensitive credential; do not paste it into the conversation or a support case.
@@ -36,15 +36,28 @@ The app reads monitoring data. It does not restart services, modify infrastructu
 7. Select **Save** to keep the configuration.
 8. Run a relevant health check and read its coverage notes before relying on the result.
 
+### Installing on a Mac
+
+1. Open Apple menu > About This Mac. If it lists an Apple M-series chip, choose the **arm64 / Apple Silicon** DMG. If it lists an Intel processor, choose the **x64 / Intel** DMG.
+2. Download the matching disk image and its checksum from the approved GitHub release.
+3. Open the DMG and drag **Dynatrace Answers** to **Applications**.
+4. Eject the mounted disk image. Launch the installed copy from Applications or Spotlight.
+5. If macOS blocks the first launch because the developer is not verified, confirm the download source and checksum. If allowed by your organization, open **System Settings > Privacy & Security** and select **Open Anyway**, then follow the system's confirmation prompt.
+6. Configure your authorized Dynatrace connection in Settings. Windows-encrypted credentials cannot be reused on a Mac.
+
+The current Mac builds are **unsigned and unnotarized** because no Apple Developer signing identity is configured. Downloading them does not require you to enroll in the Apple Developer Program, but organizational policies may prohibit running unsigned applications. An Open Anyway option may not be available on a managed Mac. Do not disable Gatekeeper globally or ignore a malware warning; use your approved IT process if the download cannot be authorized.
+
+On macOS, closing the window leaves the application running. Select its Dock icon to reopen the window. Use **Dynatrace Answers > Quit** or **Command-Q** to exit. Standard Mac edit shortcuts are available through the Edit menu. The app requires a macOS version supported by its bundled Electron runtime.
+
 The expected tenant format is `https://your-environment.apps.dynatrace.com`. A classic `.live.dynatrace.com` hostname is normalized to the apps hostname when settings are saved. The app uses the environment origin, rather than a pasted page path.
 
 Connection testing does not prove every check has permission to read its data. A token can support chat while lacking access to metrics, spans, sessions, or topology. A successful connection also does not prove that an application is instrumented or that synthetic monitoring is configured.
 
 ### Updating the saved token
 
-The platform token is encrypted using Windows secure storage. Once a token is saved, the Settings token field stays blank. Leave it blank to keep the current token, or enter a replacement token to change it.
+The platform token is encrypted using the operating system's secure storage: Windows secure storage on Windows and Keychain on macOS. Once a token is saved, the Settings token field stays blank. Leave it blank to keep the current token, or enter a replacement token to change it.
 
-Do not copy encrypted settings between users or machines expecting the credential to work. Secure-storage availability depends on the Windows user and environment. Follow your organization's credential and token-rotation procedures.
+Do not copy encrypted settings between users, machines, or operating systems expecting the credential to work. Secure-storage availability depends on the signed-in operating-system user and environment. Follow your organization's credential and token-rotation procedures.
 
 Settings, visible-button choices, and application/transaction definitions persist across restarts. Older settings are migrated from the app's previous name when appropriate. Unsaved changes are discarded when you close or cancel Settings.
 
@@ -429,7 +442,7 @@ Session health requires explicit permission because identifiers and matching ses
 
 ### Local configuration and exported files
 
-The token is encrypted locally through Windows secure storage. Other settings, such as the tenant URL, visible buttons, and application/transaction mappings, are local configuration and should not be assumed to have the same encryption protection as the credential.
+The token is encrypted locally through the operating system's secure storage (Windows secure storage or macOS Keychain). Other settings, such as the tenant URL, visible buttons, and application/transaction mappings, are local configuration and should not be assumed to have the same encryption protection as the credential.
 
 Exported PDF notes are ordinary files. This guide's download contains documentation only. Use approved storage locations for case notes and follow retention policies. Do not include a token or a raw credential in a troubleshooting screenshot.
 
@@ -458,6 +471,7 @@ This is a reference, not a recommendation to grant every scope. Grant only the a
 | What you see | What it may mean | Practical next step |
 | --- | --- | --- |
 | Not configured | No saved tenant or token is available. | Open Settings and complete the authorized connection configuration. Help remains available. |
+| macOS blocks first launch | The current Mac installer is unsigned and unnotarized, or device policy prohibits it. | Verify the source/checksum and use Privacy & Security > Open Anyway only if authorized; otherwise follow your organization's IT process. Do not disable Gatekeeper globally. |
 | Authentication error, 401, or 403 | A token is expired, invalid, or lacks permission, or the owner lacks a required policy. | Check the intended environment and approved access with the connection owner; replace the token through Settings if authorized. |
 | Connected, but a check is unknown | Chat works, but the data source may be inaccessible, empty, unsupported, or incompletely instrumented. | Read the specific coverage/source message rather than treating connection success as full access. |
 | No matching frontend | No recent matching request metrics, a different environment/name, or insufficient permissions. | Confirm the exact monitored frontend and tenant; refine the picker search. |

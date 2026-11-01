@@ -1284,10 +1284,20 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
-    Menu.setApplicationMenu(null);
+    Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate([
+      { role: "appMenu" },
+      { role: "editMenu" },
+      { role: "windowMenu" },
+    ]) : null);
     registerIpc();
     createWindow();
   });
 
-  app.on("window-all-closed", () => app.quit());
+  app.on("activate", () => {
+    if (!mainWindow && app.isReady()) createWindow();
+  });
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
 }

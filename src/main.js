@@ -136,6 +136,7 @@ function normalizeThresholds(input) {
     errorRate: { warn: pct(input?.errorRate?.warn, 1), crit: pct(input?.errorRate?.crit, 5) },
     lcp: { warn: ms(input?.lcp?.warn, 2500), crit: ms(input?.lcp?.crit, 4000) },
     inp: { warn: ms(input?.inp?.warn, 200), crit: ms(input?.inp?.crit, 500) },
+    responseMs: { warn: ms(input?.responseMs?.warn, 1000), crit: ms(input?.responseMs?.crit, 2000) },
   };
 }
 

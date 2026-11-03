@@ -338,9 +338,9 @@ function coloredPercent(value, warnThreshold, critThreshold) {
 function coloredStatus(status) {
   const span = document.createElement("span");
   span.textContent = status;
-  if (status === "Critical") span.className = "metric-crit";
-  else if (status === "Warning" || status === "Spike observed") span.className = "metric-warn";
-  else if (status === "Below threshold") span.className = "metric-ok";
+  if (/critical/i.test(status)) span.className = "metric-crit";
+  else if (/warning|attention|spike|active/i.test(status)) span.className = "metric-warn";
+  else if (/below|healthy|good|resolved|no issues/i.test(status)) span.className = "metric-ok";
   return span;
 }
 
@@ -353,13 +353,16 @@ function infraThresholds() {
 
 function detectColumnType(header) {
   const h = header.toLowerCase();
-  if (/\blcp\b/.test(h) && /\bms\b|\bp75\b|\btime\b|\bperformance\b/.test(h)) return "lcp";
-  if (/\binp\b/.test(h) && /\bms\b|\bp75\b|\btime\b|\bperformance\b/.test(h)) return "inp";
-  if (/\blcp\b/.test(h) && /status/.test(h)) return "status";
-  if (/\binp\b/.test(h) && /status/.test(h)) return "status";
-  if (/\bstatus\b|\bhealth\b|\btrend\b|\bassessment\b/.test(h)) return "status";
+  if (/page.load|lcp.*ms|ms.*lcp/.test(h)) return "lcp";
+  if (/interaction.*ms|inp.*ms|ms.*inp/.test(h)) return "inp";
+  if (/\blcp\b/.test(h) && /status|state/.test(h)) return "status";
+  if (/\binp\b/.test(h) && /status|state/.test(h)) return "status";
+  if (/\bstatus\b|\bhealth\b|\btrend\b|\bassessment\b|\bstate\b/.test(h)) return "status";
   if (/error.*rate|rate.*error|error.*%/.test(h)) return "errorRate";
   if (/\bchange\b|\bdelta\b|\bpp\b/.test(h)) return "change";
+  if (/\bavailability\b/.test(h)) return "availability";
+  if (/response.*ms|average.*ms|p95.*ms|p99.*ms|duration.*ms|latency.*ms/.test(h)) return "responseMs";
+  if (/two.hour.*%|peak.*%|average.*%|utiliz/.test(h)) return "infraPct";
   if (/\blcp\b/.test(h)) return "lcp";
   if (/\binp\b/.test(h)) return "inp";
   return "auto";
@@ -372,9 +375,9 @@ function applyMetricClass(cell, value, warn, crit) {
 }
 
 function applyStatusClass(cell, text) {
-  if (/\bgood\b|\bhealthy\b|\bbelow threshold\b|\bimproving\b/i.test(text)) cell.classList.add("metric-ok");
+  if (/\bgood\b|\bhealthy\b|\bbelow.*threshold\b|\bimproving\b|\bno issues\b|\bresolved\b/i.test(text)) cell.classList.add("metric-ok");
   else if (/\bpoor\b|\bdegraded\b|\bcritical\b|\bworsening\b/i.test(text)) cell.classList.add("metric-crit");
-  else if (/\bneeds improvement\b|\bwarning\b|\bwatch\b|\bspike\b/i.test(text)) cell.classList.add("metric-warn");
+  else if (/\bneeds improvement\b|\bwarning\b|\bwatch\b|\bspike\b|\bactive\b|\battention\b/i.test(text)) cell.classList.add("metric-warn");
 }
 
 function colorizeTableCell(cell, columnType) {
@@ -384,6 +387,8 @@ function colorizeTableCell(cell, columnType) {
   const errWarn = t.errorRate?.warn ?? 1, errCrit = t.errorRate?.crit ?? 5;
   const lcpWarn = t.lcp?.warn ?? 2500, lcpCrit = t.lcp?.crit ?? 4000;
   const inpWarn = t.inp?.warn ?? 200, inpCrit = t.inp?.crit ?? 500;
+  const respWarn = t.responseMs?.warn ?? 1000, respCrit = t.responseMs?.crit ?? 2000;
+  const cpuWarn = t.cpu?.warn ?? 70, cpuCrit = t.cpu?.crit ?? 85;
   if (columnType === "lcp") {
     const v = parseFloat(text.replace(/,/g, ""));
     if (Number.isFinite(v)) applyMetricClass(cell, v, lcpWarn, lcpCrit);
@@ -391,8 +396,21 @@ function colorizeTableCell(cell, columnType) {
     const v = parseFloat(text.replace(/,/g, ""));
     if (Number.isFinite(v)) applyMetricClass(cell, v, inpWarn, inpCrit);
   } else if (columnType === "errorRate") {
-    const v = parseFloat(text);
+    const v = parseFloat(text.replace(/,/g, ""));
     if (Number.isFinite(v)) applyMetricClass(cell, v, errWarn, errCrit);
+  } else if (columnType === "responseMs") {
+    const v = parseFloat(text.replace(/,/g, ""));
+    if (Number.isFinite(v)) applyMetricClass(cell, v, respWarn, respCrit);
+  } else if (columnType === "infraPct") {
+    const v = parseFloat(text.replace(/,/g, "").replace("%", ""));
+    if (Number.isFinite(v)) applyMetricClass(cell, v, cpuWarn, cpuCrit);
+  } else if (columnType === "availability") {
+    const v = parseFloat(text.replace(/,/g, "").replace("%", ""));
+    if (Number.isFinite(v)) {
+      if (v < 95) cell.classList.add("metric-crit");
+      else if (v < 99) cell.classList.add("metric-warn");
+      else cell.classList.add("metric-ok");
+    }
   } else if (columnType === "status") {
     applyStatusClass(cell, text);
   } else if (columnType === "change") {
@@ -402,8 +420,8 @@ function colorizeTableCell(cell, columnType) {
       else if (v > 0) cell.classList.add("metric-warn");
     }
   } else {
-    if (text.endsWith("%")) {
-      const v = parseFloat(text);
+    if (/^\d[\d,.]*\s*%$/.test(text)) {
+      const v = parseFloat(text.replace(/,/g, ""));
       if (Number.isFinite(v)) applyMetricClass(cell, v, errWarn, errCrit);
     } else {
       applyStatusClass(cell, text);
@@ -628,6 +646,7 @@ function renderOperationalReport(container, report) {
     followups.appendChild(button);
   });
   section.appendChild(followups);
+  colorizeRenderedTables(section);
   container.appendChild(section);
 }
 
@@ -1030,6 +1049,8 @@ function openSettings() {
   $("lcpCrit").value = settings.thresholds?.lcp?.crit ?? 4000;
   $("inpWarn").value = settings.thresholds?.inp?.warn ?? 200;
   $("inpCrit").value = settings.thresholds?.inp?.crit ?? 500;
+  $("respWarn").value = settings.thresholds?.responseMs?.warn ?? 1000;
+  $("respCrit").value = settings.thresholds?.responseMs?.crit ?? 2000;
   els.overlay.classList.remove("hidden");
   els.tenantUrl.focus();
 }
@@ -1231,6 +1252,7 @@ async function saveSettings() {
           errorRate: { warn: Number($("errWarn").value), crit: Number($("errCrit").value) },
           lcp: { warn: Number($("lcpWarn").value), crit: Number($("lcpCrit").value) },
           inp: { warn: Number($("inpWarn").value), crit: Number($("inpCrit").value) },
+          responseMs: { warn: Number($("respWarn").value), crit: Number($("respCrit").value) },
         },
       })),
     };

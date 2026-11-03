@@ -74,7 +74,7 @@ const FRONTEND_ACTIONS = [
   { id: "website-health", label: "Website health", inputLabel: "Frontend application", placeholder: "Application name" },
   { id: "system-health", label: "All websites health" },
   { id: "guided-triage", label: "Guided triage", category: "Investigate", inputLabel: "Reported symptom", placeholder: "What did the caller report?" },
-  { id: "session-health", label: "Session health", category: "Investigate", inputLabel: "User identifier or tag (optional)", placeholder: "e.g. maria", requiresConsent: true },
+  { id: "session-health", label: "Session health", category: "Frontend", inputLabel: "User identifier or tag (optional)", placeholder: "e.g. maria", requiresConsent: true },
   {
     id: "impact-scope",
     label: "Impact scope",

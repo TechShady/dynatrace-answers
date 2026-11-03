@@ -351,6 +351,76 @@ function infraThresholds() {
   };
 }
 
+function detectColumnType(header) {
+  const h = header.toLowerCase();
+  if (/\blcp\b/.test(h) && /\bms\b|\bp75\b|\btime\b|\bperformance\b/.test(h)) return "lcp";
+  if (/\binp\b/.test(h) && /\bms\b|\bp75\b|\btime\b|\bperformance\b/.test(h)) return "inp";
+  if (/\blcp\b/.test(h) && /status/.test(h)) return "status";
+  if (/\binp\b/.test(h) && /status/.test(h)) return "status";
+  if (/\bstatus\b|\bhealth\b|\btrend\b|\bassessment\b/.test(h)) return "status";
+  if (/error.*rate|rate.*error|error.*%/.test(h)) return "errorRate";
+  if (/\bchange\b|\bdelta\b|\bpp\b/.test(h)) return "change";
+  if (/\blcp\b/.test(h)) return "lcp";
+  if (/\binp\b/.test(h)) return "inp";
+  return "auto";
+}
+
+function applyMetricClass(cell, value, warn, crit) {
+  if (value >= crit) cell.classList.add("metric-crit");
+  else if (value >= warn) cell.classList.add("metric-warn");
+  else cell.classList.add("metric-ok");
+}
+
+function applyStatusClass(cell, text) {
+  if (/\bgood\b|\bhealthy\b|\bbelow threshold\b|\bimproving\b/i.test(text)) cell.classList.add("metric-ok");
+  else if (/\bpoor\b|\bdegraded\b|\bcritical\b|\bworsening\b/i.test(text)) cell.classList.add("metric-crit");
+  else if (/\bneeds improvement\b|\bwarning\b|\bwatch\b|\bspike\b/i.test(text)) cell.classList.add("metric-warn");
+}
+
+function colorizeTableCell(cell, columnType) {
+  const text = cell.textContent.trim();
+  if (!text || text === "-" || text === "N/A" || text === "Unknown" || text === "Not available") return;
+  const t = settings.thresholds || {};
+  const errWarn = t.errorRate?.warn ?? 1, errCrit = t.errorRate?.crit ?? 5;
+  const lcpWarn = t.lcp?.warn ?? 2500, lcpCrit = t.lcp?.crit ?? 4000;
+  const inpWarn = t.inp?.warn ?? 200, inpCrit = t.inp?.crit ?? 500;
+  if (columnType === "lcp") {
+    const v = parseFloat(text.replace(/,/g, ""));
+    if (Number.isFinite(v)) applyMetricClass(cell, v, lcpWarn, lcpCrit);
+  } else if (columnType === "inp") {
+    const v = parseFloat(text.replace(/,/g, ""));
+    if (Number.isFinite(v)) applyMetricClass(cell, v, inpWarn, inpCrit);
+  } else if (columnType === "errorRate") {
+    const v = parseFloat(text);
+    if (Number.isFinite(v)) applyMetricClass(cell, v, errWarn, errCrit);
+  } else if (columnType === "status") {
+    applyStatusClass(cell, text);
+  } else if (columnType === "change") {
+    const v = parseFloat(text);
+    if (Number.isFinite(v)) {
+      if (v < 0) cell.classList.add("metric-ok");
+      else if (v > 0) cell.classList.add("metric-warn");
+    }
+  } else {
+    if (text.endsWith("%")) {
+      const v = parseFloat(text);
+      if (Number.isFinite(v)) applyMetricClass(cell, v, errWarn, errCrit);
+    } else {
+      applyStatusClass(cell, text);
+    }
+  }
+}
+
+function colorizeRenderedTables(container) {
+  container.querySelectorAll("table").forEach((table) => {
+    const headers = [...table.querySelectorAll("th")].map((th) => th.textContent.trim());
+    const columnTypes = headers.map(detectColumnType);
+    table.querySelectorAll("tbody tr").forEach((row) => {
+      [...row.querySelectorAll("td")].forEach((cell, i) => colorizeTableCell(cell, columnTypes[i] ?? "auto"));
+    });
+  });
+}
+
 function appendInfraTable(section, title, headers, rows) {
   const heading = document.createElement("h4");
   heading.textContent = title;
@@ -536,11 +606,13 @@ function renderAnswer(div, result) {
     summary.textContent = "Additional analysis";
     const narrative = document.createElement("div");
     narrative.innerHTML = window.renderMarkdown(sanitizeAnswer(result.text) || "_No additional analysis returned._");
+    colorizeRenderedTables(narrative);
     additional.append(summary, narrative);
     div.appendChild(additional);
   } else {
     const narrative = document.createElement("div");
     narrative.innerHTML = window.renderMarkdown(sanitizeAnswer(result.text) || "_No answer returned._");
+    colorizeRenderedTables(narrative);
     div.appendChild(narrative);
   }
 
@@ -915,6 +987,12 @@ function openSettings() {
   $("cpuCrit").value = settings.thresholds?.cpu?.crit ?? 85;
   $("memWarn").value = settings.thresholds?.memory?.warn ?? 80;
   $("memCrit").value = settings.thresholds?.memory?.crit ?? 90;
+  $("errWarn").value = settings.thresholds?.errorRate?.warn ?? 1;
+  $("errCrit").value = settings.thresholds?.errorRate?.crit ?? 5;
+  $("lcpWarn").value = settings.thresholds?.lcp?.warn ?? 2500;
+  $("lcpCrit").value = settings.thresholds?.lcp?.crit ?? 4000;
+  $("inpWarn").value = settings.thresholds?.inp?.warn ?? 200;
+  $("inpCrit").value = settings.thresholds?.inp?.crit ?? 500;
   els.overlay.classList.remove("hidden");
   els.tenantUrl.focus();
 }
@@ -1113,6 +1191,9 @@ async function saveSettings() {
         thresholds: {
           cpu: { warn: Number($("cpuWarn").value), crit: Number($("cpuCrit").value) },
           memory: { warn: Number($("memWarn").value), crit: Number($("memCrit").value) },
+          errorRate: { warn: Number($("errWarn").value), crit: Number($("errCrit").value) },
+          lcp: { warn: Number($("lcpWarn").value), crit: Number($("lcpCrit").value) },
+          inp: { warn: Number($("inpWarn").value), crit: Number($("inpCrit").value) },
         },
       })),
     };

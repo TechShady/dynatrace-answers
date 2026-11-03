@@ -128,10 +128,14 @@ function normalizeButtons(input) {
 }
 
 function normalizeThresholds(input) {
-  const clamp = (v, def) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 0 && n <= 100 ? n : def; };
+  const pct = (v, def) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 0 && n <= 100 ? n : def; };
+  const ms = (v, def) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 0 ? n : def; };
   return {
-    cpu: { warn: clamp(input?.cpu?.warn, 70), crit: clamp(input?.cpu?.crit, 85) },
-    memory: { warn: clamp(input?.memory?.warn, 80), crit: clamp(input?.memory?.crit, 90) },
+    cpu: { warn: pct(input?.cpu?.warn, 70), crit: pct(input?.cpu?.crit, 85) },
+    memory: { warn: pct(input?.memory?.warn, 80), crit: pct(input?.memory?.crit, 90) },
+    errorRate: { warn: pct(input?.errorRate?.warn, 1), crit: pct(input?.errorRate?.crit, 5) },
+    lcp: { warn: ms(input?.lcp?.warn, 2500), crit: ms(input?.lcp?.crit, 4000) },
+    inp: { warn: ms(input?.inp?.warn, 200), crit: ms(input?.inp?.crit, 500) },
   };
 }
 

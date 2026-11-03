@@ -191,23 +191,54 @@
 
           <section class="settings-section">
             <h3>Metric thresholds</h3>
-            <p class="muted small">Colorize CPU and memory percentages in reports. Values at or above "Critical" show <span class="metric-crit">red</span>; at or above "Warning" show <span class="metric-warn">yellow</span>; below "Warning" show <span class="metric-ok">green</span>.</p>
+            <p class="muted small">Colorize numbers in all reports and AI responses. Values at or above "Critical" show <span class="metric-crit">red</span>; at or above "Warning" show <span class="metric-warn">yellow</span>; below "Warning" show <span class="metric-ok">green</span>. Status text (Good, Poor, Needs improvement) is always colored.</p>
+            <p class="threshold-group-label">CPU &amp; Memory (%)</p>
             <div class="threshold-grid">
               <label class="field">
-                <span>CPU warning (%)</span>
+                <span>CPU warning</span>
                 <input id="cpuWarn" type="number" min="0" max="100" step="1" />
               </label>
               <label class="field">
-                <span>CPU critical (%)</span>
+                <span>CPU critical</span>
                 <input id="cpuCrit" type="number" min="0" max="100" step="1" />
               </label>
               <label class="field">
-                <span>Memory warning (%)</span>
+                <span>Memory warning</span>
                 <input id="memWarn" type="number" min="0" max="100" step="1" />
               </label>
               <label class="field">
-                <span>Memory critical (%)</span>
+                <span>Memory critical</span>
                 <input id="memCrit" type="number" min="0" max="100" step="1" />
+              </label>
+            </div>
+            <p class="threshold-group-label">Error rate (%)</p>
+            <div class="threshold-grid">
+              <label class="field">
+                <span>Warning</span>
+                <input id="errWarn" type="number" min="0" max="100" step="0.1" />
+              </label>
+              <label class="field">
+                <span>Critical</span>
+                <input id="errCrit" type="number" min="0" max="100" step="0.1" />
+              </label>
+            </div>
+            <p class="threshold-group-label">Web Vitals (ms)</p>
+            <div class="threshold-grid">
+              <label class="field">
+                <span>LCP warning</span>
+                <input id="lcpWarn" type="number" min="0" step="100" />
+              </label>
+              <label class="field">
+                <span>LCP critical</span>
+                <input id="lcpCrit" type="number" min="0" step="100" />
+              </label>
+              <label class="field">
+                <span>INP warning</span>
+                <input id="inpWarn" type="number" min="0" step="50" />
+              </label>
+              <label class="field">
+                <span>INP critical</span>
+                <input id="inpCrit" type="number" min="0" step="50" />
               </label>
             </div>
           </section>

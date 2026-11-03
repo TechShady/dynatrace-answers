@@ -877,6 +877,25 @@ select:focus {
   color: var(--ok);
 }
 
+.metric-ok {
+  color: var(--ok);
+}
+
+.metric-warn {
+  color: var(--warn);
+}
+
+.metric-crit {
+  color: var(--err);
+  font-weight: 600;
+}
+
+.threshold-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+
 .toggle {
   display: flex;
   align-items: center;

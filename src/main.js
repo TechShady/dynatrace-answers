@@ -116,14 +116,23 @@ function loadSettings() {
       dataMode: raw.dataMode !== false,
       buttons: normalizeButtons(raw.buttons),
       definitions: raw.definitions || { applications: [], transactions: [] },
+      thresholds: normalizeThresholds(raw.thresholds),
     };
   } catch {
-    return { tenantUrl: "", tokenEnc: "", dataMode: true, buttons: normalizeButtons() };
+    return { tenantUrl: "", tokenEnc: "", dataMode: true, buttons: normalizeButtons(), thresholds: normalizeThresholds() };
   }
 }
 
 function normalizeButtons(input) {
   return Object.fromEntries([...Object.keys(FRONTEND_WORKFLOWS), "infra-health", ...healthChecks.OPERATIONAL_ACTIONS.map((action) => action.id)].map((id) => [id, input?.[id] !== false]));
+}
+
+function normalizeThresholds(input) {
+  const clamp = (v, def) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 0 && n <= 100 ? n : def; };
+  return {
+    cpu: { warn: clamp(input?.cpu?.warn, 70), crit: clamp(input?.cpu?.crit, 85) },
+    memory: { warn: clamp(input?.memory?.warn, 80), crit: clamp(input?.memory?.crit, 90) },
+  };
 }
 
 function writeSettings(settings) {
@@ -138,6 +147,7 @@ function publicSettings(settings) {
     dataMode: settings.dataMode,
     buttons: normalizeButtons(settings.buttons),
     definitions: settings.definitions || { applications: [], transactions: [] },
+    thresholds: normalizeThresholds(settings.thresholds),
     version: app.getVersion(),
   };
 }
@@ -1121,6 +1131,7 @@ function registerIpc() {
       dataMode: input?.dataMode !== false,
       buttons: normalizeButtons(input?.buttons ?? current.buttons),
       definitions: healthChecks.normalizeDefinitions(input?.definitions ?? current.definitions),
+      thresholds: normalizeThresholds(input?.thresholds ?? current.thresholds),
     };
     writeSettings(next);
     return publicSettings(next);

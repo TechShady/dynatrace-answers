@@ -322,6 +322,35 @@ function formatPercent(value) {
   return value === null || value === undefined ? "Not available" : `${Number(value).toFixed(1)}%`;
 }
 
+function coloredPercent(value, warnThreshold, critThreshold) {
+  const span = document.createElement("span");
+  if (value === null || value === undefined) { span.textContent = "Not available"; return span; }
+  const num = Number(value);
+  span.textContent = `${num.toFixed(1)}%`;
+  if (Number.isFinite(num)) {
+    if (num >= critThreshold) span.className = "metric-crit";
+    else if (num >= warnThreshold) span.className = "metric-warn";
+    else span.className = "metric-ok";
+  }
+  return span;
+}
+
+function coloredStatus(status) {
+  const span = document.createElement("span");
+  span.textContent = status;
+  if (status === "Critical") span.className = "metric-crit";
+  else if (status === "Warning" || status === "Spike observed") span.className = "metric-warn";
+  else if (status === "Below threshold") span.className = "metric-ok";
+  return span;
+}
+
+function infraThresholds() {
+  return {
+    cpu: { warn: settings.thresholds?.cpu?.warn ?? 70, crit: settings.thresholds?.cpu?.crit ?? 85 },
+    memory: { warn: settings.thresholds?.memory?.warn ?? 80, crit: settings.thresholds?.memory?.crit ?? 90 },
+  };
+}
+
 function appendInfraTable(section, title, headers, rows) {
   const heading = document.createElement("h4");
   heading.textContent = title;
@@ -363,9 +392,10 @@ function renderInfraReport(container, report) {
   const scope = Array.isArray(report.scope) ? `${report.scope.length} selected host(s)` : "All hosts";
   overview.textContent = `${scope} | ${report.window} | ${formatSessionTime(report.generatedAt)}. ` +
     (report.hostCount ? `${report.hostCount} hosts with telemetry; ${report.issueHostCount} with average or peak utilization >=80%.` : "No usable host telemetry returned; CPU and memory health is inconclusive.");
+  const t = infraThresholds();
   const thresholds = document.createElement("p");
   thresholds.className = "muted small";
-  thresholds.textContent = `${report.thresholds} Ranked by average utilization. CPU coverage: ${report.cpuCount} hosts; memory coverage: ${report.memoryCount} hosts.`;
+  thresholds.textContent = `${report.thresholds} Ranked by average utilization. CPU coverage: ${report.cpuCount} hosts; memory coverage: ${report.memoryCount} hosts. Colors: warning ≥${t.cpu.warn}%/${t.memory.warn}%, critical ≥${t.cpu.crit}%/${t.memory.crit}% (CPU/memory).`;
   section.append(heading, overview, thresholds);
   const warnings = [...report.errors];
   if (report.incompleteHostCount) warnings.push(`${report.incompleteHostCount} hosts lack usable CPU or memory readings. Their health is inconclusive.`);
@@ -377,8 +407,8 @@ function renderInfraReport(container, report) {
     warning.textContent = text;
     section.appendChild(warning);
   });
-  for (const [title, rows] of [["Top 10 Hosts - CPU", report.topCpu], ["Top 10 Hosts - Memory", report.topMemory]]) {
-    if (rows.length) appendInfraTable(section, title, ["Host", "Average", "Peak", "Assessment"], rows.map((row) => [hostAnalysisLink(row), formatPercent(row.average), formatPercent(row.peak), row.status]));
+  for (const [title, rows, tw] of [["Top 10 Hosts - CPU", report.topCpu, t.cpu], ["Top 10 Hosts - Memory", report.topMemory, t.memory]]) {
+    if (rows.length) appendInfraTable(section, title, ["Host", "Average", "Peak", "Assessment"], rows.map((row) => [hostAnalysisLink(row), coloredPercent(row.average, tw.warn, tw.crit), coloredPercent(row.peak, tw.warn, tw.crit), coloredStatus(row.status)]));
     else {
       const empty = document.createElement("p");
       empty.textContent = `${title}: no usable readings.`;
@@ -386,20 +416,21 @@ function renderInfraReport(container, report) {
     }
   }
   if (report.selected.length > 1) {
-    appendInfraTable(section, "Selected Hosts", ["Host", "CPU avg", "CPU peak", "Memory avg", "Memory peak"], report.selected.map((host) => [hostAnalysisLink(host), formatPercent(host.cpu?.average), formatPercent(host.cpu?.peak), formatPercent(host.memory?.average), formatPercent(host.memory?.peak)]));
+    appendInfraTable(section, "Selected Hosts", ["Host", "CPU avg", "CPU peak", "Memory avg", "Memory peak"], report.selected.map((host) => [hostAnalysisLink(host), coloredPercent(host.cpu?.average, t.cpu.warn, t.cpu.crit), coloredPercent(host.cpu?.peak, t.cpu.warn, t.cpu.crit), coloredPercent(host.memory?.average, t.memory.warn, t.memory.crit), coloredPercent(host.memory?.peak, t.memory.warn, t.memory.crit)]));
   }
   if (report.detail) {
     appendInfraTable(section, "Two-Hour Comparison", ["Resource", "Previous avg", "Latest 5m avg", "5m buckets >=80%", "5m buckets >=90%", "Missing buckets"], ["cpu", "memory"].map((metric) => {
       const detail = report.detail[metric];
       const current = detail.current;
-      return [metric === "cpu" ? "CPU" : "Memory", formatPercent(detail.previous?.average), formatPercent(current?.latest), current ? `${current.warningBuckets}/${current.observedBuckets}` : "Not available", current ? `${current.criticalBuckets}/${current.observedBuckets}` : "Not available", current ? String(current.missingBuckets) : "Not available"];
+      const tw = metric === "cpu" ? t.cpu : t.memory;
+      return [metric === "cpu" ? "CPU" : "Memory", coloredPercent(detail.previous?.average, tw.warn, tw.crit), coloredPercent(current?.latest, tw.warn, tw.crit), current ? `${current.warningBuckets}/${current.observedBuckets}` : "Not available", current ? `${current.criticalBuckets}/${current.observedBuckets}` : "Not available", current ? String(current.missingBuckets) : "Not available"];
     }));
     const cpu = report.detail.cpu.current;
     const memory = report.detail.memory.current;
     const samples = Math.max(cpu?.samples.length || 0, memory?.samples.length || 0);
     if (samples) {
       const start = new Date(cpu?.timeframe?.start || memory?.timeframe?.start).getTime();
-      appendInfraTable(section, "Five-Minute Readings", ["Bucket start", "CPU avg", "Memory avg"], Array.from({ length: samples }, (_, index) => [Number.isFinite(start) ? formatSessionTime(start + index * 300000) : `Bucket ${index + 1}`, formatPercent(cpu?.samples[index]), formatPercent(memory?.samples[index])]));
+      appendInfraTable(section, "Five-Minute Readings", ["Bucket start", "CPU avg", "Memory avg"], Array.from({ length: samples }, (_, index) => [Number.isFinite(start) ? formatSessionTime(start + index * 300000) : `Bucket ${index + 1}`, coloredPercent(cpu?.samples[index], t.cpu.warn, t.cpu.crit), coloredPercent(memory?.samples[index], t.memory.warn, t.memory.crit)]));
     }
   }
   container.appendChild(section);
@@ -880,6 +911,10 @@ function openSettings() {
     $(type === "applications" ? "applicationDefinitions" : "transactionDefinitions").replaceChildren();
     (settings.definitions?.[type] || []).forEach((definition) => addDefinitionRow(type, definition));
   }
+  $("cpuWarn").value = settings.thresholds?.cpu?.warn ?? 70;
+  $("cpuCrit").value = settings.thresholds?.cpu?.crit ?? 85;
+  $("memWarn").value = settings.thresholds?.memory?.warn ?? 80;
+  $("memCrit").value = settings.thresholds?.memory?.crit ?? 90;
   els.overlay.classList.remove("hidden");
   els.tenantUrl.focus();
 }
@@ -1075,6 +1110,10 @@ async function saveSettings() {
         dataMode: els.dataMode.checked,
         buttons: Object.fromEntries([...$("buttonSettings").querySelectorAll("input")].map((input) => [input.dataset.action, input.checked])),
         definitions: window.healthChecks.normalizeDefinitions(collectDefinitions()),
+        thresholds: {
+          cpu: { warn: Number($("cpuWarn").value), crit: Number($("cpuCrit").value) },
+          memory: { warn: Number($("memWarn").value), crit: Number($("memCrit").value) },
+        },
       })),
     };
     if (tenantChanged) newChat();

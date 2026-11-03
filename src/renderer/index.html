@@ -188,6 +188,29 @@
               even when this option is off. Query results are sent to Dynatrace Intelligence and may contain sensitive values.
             </p>
           </section>
+
+          <section class="settings-section">
+            <h3>Metric thresholds</h3>
+            <p class="muted small">Colorize CPU and memory percentages in reports. Values at or above "Critical" show <span class="metric-crit">red</span>; at or above "Warning" show <span class="metric-warn">yellow</span>; below "Warning" show <span class="metric-ok">green</span>.</p>
+            <div class="threshold-grid">
+              <label class="field">
+                <span>CPU warning (%)</span>
+                <input id="cpuWarn" type="number" min="0" max="100" step="1" />
+              </label>
+              <label class="field">
+                <span>CPU critical (%)</span>
+                <input id="cpuCrit" type="number" min="0" max="100" step="1" />
+              </label>
+              <label class="field">
+                <span>Memory warning (%)</span>
+                <input id="memWarn" type="number" min="0" max="100" step="1" />
+              </label>
+              <label class="field">
+                <span>Memory critical (%)</span>
+                <input id="memCrit" type="number" min="0" max="100" step="1" />
+              </label>
+            </div>
+          </section>
         </div>
 
         <div class="dialog-footer">

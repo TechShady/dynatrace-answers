@@ -534,6 +534,43 @@ function renderOperationalReport(container, report) {
     overview.append(term, description);
   });
   section.appendChild(overview);
+  const summarizable = report.sections.filter((item) => {
+    if (!item.rows.length) return false;
+    const cols = item.columns.map((c) => c.toLowerCase());
+    return cols.includes("status") || cols.includes("state");
+  });
+  if (summarizable.length) {
+    const summaryEl = document.createElement("ul");
+    summaryEl.className = "report-summary";
+    summarizable.forEach((item) => {
+      const cols = item.columns.map((c) => c.toLowerCase());
+      const statusIdx = cols.indexOf("status");
+      const stateIdx = cols.indexOf("state");
+      const li = document.createElement("li");
+      if (statusIdx !== -1) {
+        let crit = 0, warn = 0;
+        item.rows.forEach((row) => {
+          const s = String(row[statusIdx] || "");
+          if (s === "Critical") crit++;
+          else if (s === "Warning" || s === "Needs attention") warn++;
+        });
+        const flagged = crit + warn;
+        const parts = [];
+        if (crit) parts.push(`${crit} critical`);
+        if (warn) parts.push(`${warn} warning`);
+        li.textContent = flagged
+          ? `${item.title}: ${flagged} flagged (${parts.join(", ")}) of ${item.rows.length}`
+          : `${item.title}: ${item.rows.length} checked, none flagged`;
+      } else {
+        const active = item.rows.filter((row) => String(row[stateIdx] || "").toUpperCase() === "ACTIVE").length;
+        li.textContent = active
+          ? `${item.title}: ${active} active of ${item.rows.length} recorded`
+          : `${item.title}: ${item.rows.length} recorded, none active`;
+      }
+      summaryEl.appendChild(li);
+    });
+    section.appendChild(summaryEl);
+  }
   report.sections.forEach((item) => {
     const details = document.createElement("details");
     details.className = "evidence-section";

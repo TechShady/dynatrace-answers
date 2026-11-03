@@ -394,6 +394,17 @@ body {
   margin: 0;
 }
 
+.report-summary {
+  margin: 10px 0 12px;
+  padding: 0 0 0 1.4em;
+  list-style: disc;
+}
+
+.report-summary li {
+  margin: 4px 0;
+  font-size: 13px;
+}
+
 .evidence-section {
   padding: 10px 0;
   border-top: 1px solid var(--border);
